@@ -627,7 +627,7 @@ class Computable:
     def compute(
         self,
         arg: Union[Dataset, AppFuture[list], list, AppFuture, Geometry],
-        outputs: Union[str, list[str], None] = None,
+        *outputs: str,
         batch_size: Optional[int] = -1,  # if -1: take class default
     ) -> Union[list[AppFuture], AppFuture]:
         """
@@ -641,13 +641,13 @@ class Computable:
         Returns:
             Union[list[AppFuture], AppFuture]: Future(s) representing computation results.
         """
-        if outputs is None:
-            outputs = list(self.__class__.outputs)
+        # TODO: only Hamiltonian uses this implementation -- move?
+        outputs = outputs or self.__class__.outputs                 # use defaults when outputs is ()
         if batch_size == -1:
             batch_size = self.__class__.batch_size
         return compute(
             arg,
             self.app,
-            outputs_=outputs,
+            outputs_=list(outputs),
             batch_size=batch_size,
         )

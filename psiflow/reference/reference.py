@@ -105,7 +105,7 @@ class Reference(Computable):
     outputs: tuple
     batch_size: ClassVar[int] = 1  # not really used
 
-    def compute(self, dataset: Dataset, *outputs: Optional[Union[str, tuple]]):
+    def compute(self, dataset: Dataset, *outputs: str) -> Union[list[AppFuture], AppFuture]:
         compute_outputs = compute_dataset(dataset, dataset.length(), self)
         if len(outputs) == 0:
             outputs_ = tuple(self.outputs)

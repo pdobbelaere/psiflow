@@ -106,11 +106,10 @@ class MixtureHamiltonian(Hamiltonian):
     def compute(  # override compute for efficient batching
         self,
         arg: Union[Dataset, AppFuture[list], list, AppFuture, Geometry],
-        outputs: Union[str, list[str], None] = None,
+        *outputs: str,
         batch_size: Optional[int] = None,
     ) -> Union[list[AppFuture], AppFuture]:
-        if outputs is None:
-            outputs = list(self.__class__.outputs)
+        outputs = outputs or self.__class__.outputs             # use defaults when outputs is ()
         apply_apps = [h.app for h in self.hamiltonians]
         reduce_func = partial(
             aggregate_multiple,
@@ -119,7 +118,7 @@ class MixtureHamiltonian(Hamiltonian):
         return compute(
             arg,
             *apply_apps,
-            outputs_=outputs,
+            outputs_=list(outputs),
             reduce_func=reduce_func,
             batch_size=batch_size,
         )
