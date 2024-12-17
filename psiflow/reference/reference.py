@@ -106,21 +106,18 @@ class Reference(Computable):
     batch_size: ClassVar[int] = 1  # not really used
 
     def compute(self, dataset: Dataset, *outputs: str) -> Union[list[AppFuture], AppFuture]:
-        compute_outputs = compute_dataset(dataset, dataset.length(), self)
-        if len(outputs) == 0:
-            outputs_ = tuple(self.outputs)
-        else:
-            outputs_ = outputs
-        to_return = []
-        for output in outputs_:
+        for output in outputs:
             if output not in self.outputs:
                 raise ValueError("output {} not in {}".format(output, self.outputs))
-            index = outputs_.index(output)
-            to_return.append(compute_outputs[index])
-        if len(outputs_) == 1:
-            return to_return[0]
+
+        # TODO: Reference implementations store self.outputs as list, Hamiltonians use a tuple..
+        outputs_ = list(outputs or self.outputs)
+        indices = [self.outputs.index(output) for output in outputs_]
+        compute_outputs = compute_dataset(dataset, dataset.length(), self)
+        if len(indices) == 1:
+            return compute_outputs[indices[0]]
         else:
-            return to_return
+            return [compute_outputs[idx] for idx in indices]
 
     def compute_atomic_energy(self, element, box_size=None):
         energies = []
