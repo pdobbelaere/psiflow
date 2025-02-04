@@ -13,6 +13,7 @@ from psiflow.data.utils import write_frames
 from psiflow.geometry import Geometry
 from psiflow.hamiltonians import Hamiltonian
 from psiflow.utils.io import dump_json
+from psiflow.sampling.sampling import serialize_mixture, label_forces
 
 from ._optimize import ALLOWED_MODES, EVAL_COMMAND
 
@@ -54,22 +55,6 @@ def _execute_ase(
 execute_ase = bash_app(_execute_ase, executors=["ModelEvaluation"])
 
 
-def setup_forces(hamiltonian: Hamiltonian) -> tuple[list[dict], list[DataFuture]]:
-    hamiltonian = 1.0 * hamiltonian  # convert to mixture
-    counts, forces, futures = {}, [], []
-    for h, c in zip(hamiltonian.hamiltonians, hamiltonian.coefficients):
-        name = h.__class__.__name__
-        if name not in counts:
-            counts[name] = 0
-        count = counts.get(name)
-        counts[name] += 1
-        future = h.serialize_function(dtype="float64")          # double precision for MLPs
-        futures.append(future)
-        force = dict(forcefield=name + str(count), weight=str(c), file=future.filename)
-        forces.append(force)
-    return forces, futures
-
-
 @typeguard.typechecked
 def optimize(
     state: Union[Geometry, AppFuture],
@@ -94,7 +79,12 @@ def optimize(
     command_launch = " ".join(command_list)
 
     input_geometry = Dataset([state]).extxyz
-    forces, input_forces = setup_forces(hamiltonian)
+    hamiltonian = 1.0 * hamiltonian  # convert to mixture
+    names, coeffs = label_forces(hamiltonian), hamiltonian.coefficients
+    input_forces = serialize_mixture(hamiltonian, dtype="float64")          # double precision for MLPs
+    forces = [
+        dict(forcefield=n, weight=str(c), file=f.filename) for n, c, f in zip(names, coeffs, input_forces)
+    ]
 
     config = dict(
         task='ASE optimisation',
@@ -128,8 +118,6 @@ def optimize(
         parsl_resource_specification=definition.wq_resources(1),
     )
 
-    # TODO: is this hamiltonian single precision maybe?
-    # final = Dataset(None, result.outputs[0]).evaluate(hamiltonian)[-1]
     final = Dataset(None, result.outputs[0])[-1]
     if keep_trajectory:
         trajectory = Dataset(None, result.outputs[1])
