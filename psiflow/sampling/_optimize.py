@@ -54,8 +54,8 @@ class FunctionCalculator(Calculator):
     ):
         super().calculate(atoms, properties, system_changes)
         geometry = Geometry.from_atoms(self.atoms)
-        outputs = self.function([geometry])
-        self.results = {name: array[0] for name, array in outputs.items()}
+        outputs = self.function(geometry)
+        self.results = {name: array for name, array in outputs.items()}
         self.results['free_energy'] = self.results['energy']                # required by optimiser
 
 
