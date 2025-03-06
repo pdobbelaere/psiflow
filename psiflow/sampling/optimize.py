@@ -15,7 +15,9 @@ from psiflow.hamiltonians import Hamiltonian
 from psiflow.utils.io import dump_json
 from psiflow.sampling.sampling import serialize_mixture, label_forces
 
-from ._optimize import ALLOWED_MODES, EVAL_COMMAND
+from ._optimize import ALLOWED_MODES
+
+EXECUTABLE = 'psiflow-ase-opt'      # not stored in ModelEvaluation (yet?)
 
 
 def _execute_ase(
@@ -72,7 +74,8 @@ def optimize(
 
     context = psiflow.context()
     definition = context.definitions["ModelEvaluation"]
-    command_list = [f"python {EVAL_COMMAND}"]
+
+    command_list = [EXECUTABLE]
     if definition.max_simulation_time is not None:
         max_time = 0.9 * (60 * definition.max_simulation_time)
         command_list = ["timeout -s 15 {}s".format(max_time), *command_list]
