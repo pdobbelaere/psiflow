@@ -14,6 +14,7 @@ from psiflow.geometry import Geometry
 from psiflow.hamiltonians import Hamiltonian
 from psiflow.utils.io import dump_json
 from psiflow.sampling.sampling import serialize_mixture, label_forces
+from psiflow.utils import TMP_COMMAND, CD_COMMAND
 
 from ._optimize import ALLOWED_MODES
 
@@ -29,26 +30,23 @@ def _execute_ase(
     stderr: str = "",
     parsl_resource_specification: Optional[dict] = None,
 ) -> str:
-    tmp_command = "tmpdir=$(mktemp -d)"
-    cd_command = "cd $tmpdir"
     env_command = 'export ' + ' '.join([f"{name}={value}" for name, value in env_vars.items()])
-    command_start = command_launch + ' run'
-    command_start += f" --input_config={inputs[0].filepath}"
-    command_start += f" --start_xyz={inputs[1].filepath}"
-    for future in inputs[2:]:
-        command_start += f" --path_hamiltonian={future.filepath}"
-    command_start += "  &"
-    command_end = command_launch + ' clean'
-    command_end += f" --output_xyz={outputs[0].filepath}"
-    if len(outputs) == 2:
-        command_end += f" --output_traj={outputs[1].filepath}"
-
+    command_start = ' '.join([
+        command_launch, 'run',
+        f'--input_config={inputs[0].filepath}',
+        f'--start_xyz={inputs[1].filepath}',
+        *[f'--path_hamiltonian={_.filepath}' for _ in inputs[2:]], '&'
+    ])
+    command_end = ' '.join([
+        command_launch, 'clean', f'--output_xyz={outputs[0].filepath}',
+        f'--output_traj={outputs[1].filepath}' if len(outputs) == 2 else ''
+    ])
     command_list = [
-        tmp_command,
-        cd_command,
+        TMP_COMMAND,
+        CD_COMMAND,
         env_command,
         command_start,
-        "wait;",
+        "wait",
         command_end,
     ]
     return "\n".join(command_list)
