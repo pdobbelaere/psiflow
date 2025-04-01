@@ -198,7 +198,12 @@ class HarmonicFunction(EnergyFunction):
 
 @typeguard.typechecked
 @dataclass
-class MACEFunction(EnergyFunction):
+class DeepMDFunction(EnergyFunction):
+    # TODO: number of used threads?
+    # TODO: model precision
+    # TODO: model device
+    # TODO: neighbour list
+
     model_path: str
     ncores: int
     device: str
@@ -207,38 +212,21 @@ class MACEFunction(EnergyFunction):
     env_vars: Optional[dict[str, str]] = None
 
     def __post_init__(self):
-        import logging
         import os
 
         # import environment variables before any nontrivial imports
         if self.env_vars is not None:
             for key, value in self.env_vars.items():
                 os.environ[key] = value
-
-        import torch
-        from mace.tools import torch_tools, utils
-
-        torch_tools.set_default_dtype(self.dtype)
         if self.device == "gpu":  # when it's not a specific GPU, use any
             self.device = "cuda"
-        self.device = torch_tools.init_device(self.device)
 
-        torch.set_num_threads(self.ncores)
-        model = torch.load(f=self.model_path, map_location="cpu")
-        if self.dtype == "float64":
-            model = model.double()
-        else:
-            model = model.float()
-        model = model.to(self.device)
-        model.eval()
-        self.model = model
-        self.r_max = float(self.model.r_max)
-        self.z_table = utils.AtomicNumberTable(
-            [int(z) for z in self.model.atomic_numbers]
-        )
+        import tensorflow as tf
+        from deepmd.infer import DeepPot
+        print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+        tf.keras.backend.set_floatx('float64')
 
-        # remove unwanted streamhandler added by MACE / torch!
-        logging.getLogger("").removeHandler(logging.getLogger("").handlers[0])
+        self.model = DeepPot(self.model_path)
 
     def get_atomic_energy(self, geometry):
         total = 0
@@ -254,11 +242,6 @@ class MACEFunction(EnergyFunction):
         return total
 
     def __call__(self, geometries: list[Geometry]) -> dict[str, np.ndarray]:
-        from mace import data
-        from mace.tools import torch_geometric, torch_tools
-
-        torch_tools.set_default_dtype(self.dtype)
-
         energy, forces, stress = create_outputs(self.outputs, geometries)
 
         for i, geometry in enumerate(geometries):
@@ -271,35 +254,17 @@ class MACEFunction(EnergyFunction):
             else:
                 energy[i] = 0.0
 
-            cell = None
-            if geometry.periodic:
-                cell = np.copy(geometry.cell)
-            atoms = Atoms(
-                positions=geometry.per_atom.positions,
-                numbers=geometry.per_atom.numbers,
-                cell=cell,
-                pbc=geometry.periodic,
+            energy, forces, virial = self.model.eval(
+                coords=geometry.per_atom.positions,
+                cells=geometry.cell,
+                atom_types=geometry.per_atom.numbers
             )
-            config = data.config_from_atoms(atoms)
-            data_loader = torch_geometric.dataloader.DataLoader(
-                dataset=[
-                    data.AtomicData.from_config(
-                        config, z_table=self.z_table, cutoff=self.r_max
-                    )
-                ],
-                batch_size=1,
-                shuffle=False,
-                drop_last=False,
-            )
-            batch = next(iter(data_loader)).to(device=self.device)
 
-            compute_stress = cell is not None
-            out = self.model(batch.to_dict(), compute_stress=compute_stress)
-
-            energy[i] += out["energy"].detach().cpu().item()
-            forces[i, : len(geometry)] = out["forces"].detach().cpu().numpy()
-            if cell is not None:
-                stress[i, :] = out["stress"].detach().cpu().numpy()
+            energy[i] += energy
+            forces[i, : len(geometry)] = forces
+            if geometry.cell is not None:
+                # TODO: virial != stress
+                stress[i, :] = virial
         return {"energy": energy, "forces": forces, "stress": stress}
 
 
@@ -343,7 +308,7 @@ def function_from_json(path: Union[str, Path], **kwargs) -> Function:
     functions = [
         EinsteinCrystalFunction,
         HarmonicFunction,
-        MACEFunction,
+        DeepMDFunction,
         PlumedFunction,
         None,
     ]

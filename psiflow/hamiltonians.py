@@ -17,7 +17,7 @@ from psiflow.data import Computable, Dataset, aggregate_multiple, compute
 from psiflow.functions import (
     EinsteinCrystalFunction,
     HarmonicFunction,
-    MACEFunction,
+    DeepMDFunction,
     PlumedFunction,
     ZeroFunction,
     _apply,
@@ -367,10 +367,10 @@ class Harmonic(Hamiltonian):
 
 @typeguard.typechecked
 @psiflow.serializable
-class MACEHamiltonian(Hamiltonian):
+class DeepMDHamiltonian(Hamiltonian):
     external: psiflow._DataFuture
     atomic_energies: dict[str, float]
-    function_name: ClassVar[str] = "MACEFunction"
+    function_name: ClassVar[str] = "DeepMDFunction"
 
     def __init__(
         self,
@@ -392,7 +392,7 @@ class MACEHamiltonian(Hamiltonian):
         # execution-side parameters of function are not included in self.parameters()
         self.app = partial(
             apply_app,
-            function_cls=MACEFunction,
+            function_cls=DeepMDFunction,
             parsl_resource_specification=resources,
             **self.parameters(),
         )
@@ -410,7 +410,7 @@ class MACEHamiltonian(Hamiltonian):
         }
 
     def __eq__(self, hamiltonian) -> bool:
-        if type(hamiltonian) is not MACEHamiltonian:
+        if type(hamiltonian) is not DeepMDHamiltonian:
             return False
         if self.external.filepath != hamiltonian.external.filepath:
             return False
@@ -424,26 +424,3 @@ class MACEHamiltonian(Hamiltonian):
                 return False
         return True
 
-    @classmethod
-    def mace_mp0(cls, size: str = "small") -> MACEHamiltonian:
-        urls = dict(
-            small="https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0/2023-12-10-mace-128-L0_energy_epoch-249.model",  # 2023-12-10-mace-128-L0_energy_epoch-249.model
-            large="https://github.com/ACEsuit/mace-mp/releases/download/mace_mp_0/2023-12-03-mace-128-L1_epoch-199.model",
-        )
-        assert size in urls
-        parsl_file = psiflow.context().new_file("mace_mp_", ".pth")
-        urllib.request.urlretrieve(
-            urls[size],
-            parsl_file.filepath,
-        )
-        return cls(parsl_file, {})
-
-    @classmethod
-    def mace_cc(cls) -> MACEHamiltonian:
-        url = "https://github.com/molmod/psiflow/raw/main/examples/data/ani500k_cc_cpu.model"
-        parsl_file = psiflow.context().new_file("mace_mp_", ".pth")
-        urllib.request.urlretrieve(
-            url,
-            parsl_file.filepath,
-        )
-        return cls(parsl_file, {})

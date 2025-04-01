@@ -210,7 +210,7 @@ class ModelEvaluation(ExecutionDefinition):
         nwalkers: int,
         motion: str,
     ) -> list[str]:
-        if "MACE" in hamiltonian_name:
+        if "DeepMD" in hamiltonian_name:
             if motion in ["minimize", "vibrations"]:
                 dtype = "float64"
             else:
