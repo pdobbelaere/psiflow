@@ -73,6 +73,14 @@ def serializable(cls):
         else:
             if get_origin(type_hint) is ClassVar:
                 continue  # do nothing for classvars
+            try:
+                # TODO: 3.12 hotfix, but not a solution
+                from types import GenericAlias
+                if isinstance(type_hint, GenericAlias):
+                    kind = "attrs"
+                    continue
+            except ImportError:
+                pass
             if not inspect.isclass(type_hint):
                 raise ValueError(
                     "{} is formally not a class ({})".format(type_hint, name)
