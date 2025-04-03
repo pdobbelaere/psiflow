@@ -199,34 +199,41 @@ class HarmonicFunction(EnergyFunction):
 @typeguard.typechecked
 @dataclass
 class DeepMDFunction(EnergyFunction):
-    # TODO: number of used threads?
-    # TODO: model precision
-    # TODO: model device
-    # TODO: neighbour list
-
     model_path: str
-    ncores: int
     device: str
-    dtype: str
     atomic_energies: dict[str, float]
+    rcut: float = None                      # neighbourlist cutoff
     env_vars: Optional[dict[str, str]] = None
+    ncores: int = 1                         # not used
+    dtype: str = 'float32'                  # dtype is fixed for frozen DeepMD models
 
     def __post_init__(self):
         import os
+        import tensorflow as tf
+        from ase import neighborlist
+        from deepmd.calculator import DP
 
         # import environment variables before any nontrivial imports
         if self.env_vars is not None:
             for key, value in self.env_vars.items():
                 os.environ[key] = value
-        if self.device == "gpu":  # when it's not a specific GPU, use any
+        if self.device == "gpu":        # when it's not a specific GPU, use any
             self.device = "cuda"
+        elif self.device == 'cpu':      # make GPU not discoverable
+            os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
-        import tensorflow as tf
-        from deepmd.infer import DeepPot
-        print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
-        tf.keras.backend.set_floatx('float64')
+        # thread shenanigans -- TODO: this needs some more investigating
+        nthreads = os.environ.pop('OMP_NUM_THREADS', '1')
+        os.environ['DP_INTRA_OP_PARALLELISM_THREADS'] = os.environ['DP_INTER_OP_PARALLELISM_THREADS'] = nthreads
+        os.environ['OMP_NUM_THREADS'] = '1'
 
-        self.model = DeepPot(self.model_path)
+        print("Available devices: ", *tf.config.list_physical_devices(), sep='\n')
+        neighbor_list = None
+        if self.rcut is not None:       # otherwise use built-in with default (?) cutoff
+            neighbor_list = neighborlist.NewPrimitiveNeighborList(
+                cutoffs=self.rcut, bothways=True, self_interaction=False
+            )
+        self.calc = DP(self.model_path, neighbor_list=neighbor_list)
 
     def get_atomic_energy(self, geometry):
         total = 0
@@ -242,6 +249,7 @@ class DeepMDFunction(EnergyFunction):
         return total
 
     def __call__(self, geometries: list[Geometry]) -> dict[str, np.ndarray]:
+        from ase.stress import voigt_6_to_full_3x3_stress
         energy, forces, stress = create_outputs(self.outputs, geometries)
 
         for i, geometry in enumerate(geometries):
@@ -254,17 +262,14 @@ class DeepMDFunction(EnergyFunction):
             else:
                 energy[i] = 0.0
 
-            energy, forces, virial = self.model.eval(
-                coords=geometry.per_atom.positions,
-                cells=geometry.cell,
-                atom_types=geometry.per_atom.numbers
-            )
+            atoms = Atoms(positions=geometry.per_atom.positions, numbers=geometry.per_atom.numbers,
+                          cell=geometry.cell, pbc=geometry.cell is not None)
+            self.calc.calculate(atoms)
 
-            energy[i] += energy
-            forces[i, : len(geometry)] = forces
+            energy[i] += self.calc.get_potential_energy()
+            forces[i, : len(geometry)] = self.calc.get_forces()
             if geometry.cell is not None:
-                # TODO: virial != stress
-                stress[i, :] = virial
+                stress[i, :] = voigt_6_to_full_3x3_stress(self.calc.get_stress())
         return {"energy": energy, "forces": forces, "stress": stress}
 
 
