@@ -264,16 +264,16 @@ class DeepMDFunction(EnergyFunction):
 
             atoms = Atoms(positions=geometry.per_atom.positions, numbers=geometry.per_atom.numbers,
                           cell=geometry.cell, pbc=geometry.cell is not None)
-            self.calc.calculate(atoms)
+            self.calc.calculate(atoms, properties=['stress'])               # necessary kwarg
 
             energy[i] += self.calc.get_potential_energy()
             forces[i, : len(geometry)] = self.calc.get_forces()
             if geometry.cell is not None:
                 stress[i, :] = voigt_6_to_full_3x3_stress(self.calc.get_stress())
+
         return {"energy": energy, "forces": forces, "stress": stress}
 
 
-@staticmethod
 def sort_outputs(
     outputs_: list[str],
     **kwargs,

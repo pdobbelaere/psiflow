@@ -371,13 +371,16 @@ class DeepMDHamiltonian(Hamiltonian):
     external: psiflow._DataFuture
     atomic_energies: dict[str, float]
     function_name: ClassVar[str] = "DeepMDFunction"
+    rcut: Optional[float]
 
     def __init__(
         self,
         external: Union[Path, str, psiflow._DataFuture],
         atomic_energies: dict[str, float],
+        rcut: Optional[float] = None
     ):
         self.atomic_energies = atomic_energies
+        self.rcut = rcut
         if type(external) in [str, Path]:
             self.external = File(external)
         else:
@@ -407,6 +410,7 @@ class DeepMDHamiltonian(Hamiltonian):
             "dtype": "float32",
             "device": "gpu" if evaluation.gpu else "cpu",
             "env_vars": evaluation.env_vars,
+            "rcut": self.rcut
         }
 
     def __eq__(self, hamiltonian) -> bool:
