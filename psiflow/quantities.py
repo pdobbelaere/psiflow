@@ -14,6 +14,7 @@ class Type(enum.Enum):
     CUSTOM = 'custom'
 
 
+@typeguard.typechecked
 @dataclass(frozen=True)
 class Quantity:
     name: str
@@ -22,6 +23,11 @@ class Quantity:
     dtype: type = np.float64
     per_atom: bool = False
     default: Any = np.nan
+
+    def __post_init__(self):
+        assert np.issubdtype(self.dtype, np.generic)
+        if np.issubdtype(self.dtype, np.character):
+            assert self.shape == (1,)
 
 
 # structural
@@ -43,7 +49,6 @@ stdout = Quantity('stdout', Type.METADATA, (1,), str, default='')
 
 
 @dataclass
-@typeguard.typechecked
 class Quantities:
     """Just a container"""
     per_atom = (numbers, positions, forces)
@@ -65,6 +70,7 @@ class Quantities:
         return np.dtype([(q.name, q.dtype, q.shape) for q in self.per_atom])
 
 
+@typeguard.typechecked
 def register_quantity(
     name: str,
     shape: tuple[int, ...],
@@ -74,12 +80,15 @@ def register_quantity(
     default: Any = np.nan
 ) -> None:
     """"""
-    if per_atom:
-        assert len(shape) == 1
+    assert name not in quantities.all, f'Quantity "{name}" has already been registered.'
     quantity = Quantity(name, type, shape, dtype, per_atom, default)
     if per_atom:
+        assert len(shape) == 1
+        assert not np.issubdtype(dtype, np.character), f'Per-atom {dtype} quantities are not implemented (yet)'
         quantities.per_atom += (quantity,)
         quantities.per_atom_dtypes = quantities.get_per_atom_dtype()
+    elif type == Type.METADATA:
+        quantities.meta += (quantity,)
     else:
         quantities.regular += (quantity,)
         quantities.write_to_header.add(quantity)
