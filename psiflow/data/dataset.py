@@ -9,11 +9,11 @@ import typeguard
 from parsl.app.app import join_app, python_app
 from parsl.app.python import PythonApp
 from parsl.data_provider.files import File
-from parsl.dataflow.futures import AppFuture
+from parsl.dataflow.futures import AppFuture, DataFuture
 
 import psiflow
-from psiflow.geometry import QUANTITIES, Geometry
-from psiflow.utils.apps import combine_futures, copy_data_future, unpack_i
+from psiflow.geometry import Geometry
+from psiflow.utils.apps import combine_futures, copy_data_future
 
 from .utils import (
     align_axes,
@@ -43,7 +43,6 @@ class Dataset:
 
     This class provides methods for manipulating and analyzing collections of atomic structures.
     """
-
     extxyz: psiflow._DataFuture
 
     def __init__(
@@ -59,21 +58,16 @@ class Dataset:
             extxyz: Optional DataFuture representing an existing extxyz file.
 
         Note:
-            Either states or extxyz should be provided, not both.
+            Either states or extxyz should be provided, not both.       TODO: Why?
         """
+        # TODO: constructor only likes lists?
         if extxyz is not None:
             assert states is None
             self.extxyz = extxyz
         else:
             assert states is not None
-            if not isinstance(states, list):  # AppFuture[list, geometry]
-                extra_states = states
-                states = []
-            else:
-                extra_states = None
             self.extxyz = write_frames(
-                *states,
-                extra_states=extra_states,
+                *(states if isinstance(states, list) else [states]),
                 outputs=[psiflow.context().new_file("data_", ".xyz")],
             ).outputs[0]
 
@@ -112,22 +106,18 @@ class Dataset:
         Returns:
             Union[Dataset, AppFuture]: A new Dataset or an AppFuture of a single Geometry.
         """
+        outputs = [] if isinstance(index, int) else [psiflow.context().new_file("data_", ".xyz")]
+        future = read_frames(
+            index,
+            inputs=[self.extxyz],
+            outputs=outputs,            # only write multiple geometries to new Dataset
+        )
         if isinstance(index, int):
-            future = read_frames(
-                [index],
-                inputs=[self.extxyz],
-                outputs=[],  # will return Geometry as Future
-            )
-            return unpack_i(future, 0)
-        else:  # slice, list, AppFuture
-            extxyz = read_frames(
-                index,
-                inputs=[self.extxyz],
-                outputs=[psiflow.context().new_file("data_", ".xyz")],
-            ).outputs[0]
-            return Dataset(None, extxyz)
+            return future[0]
+        else:
+            return Dataset(None, future.outputs[0])
 
-    def save(self, path: Union[Path, str]) -> AppFuture:
+    def save(self, path: Union[Path, str]) -> DataFuture:
         """
         Save the dataset to a file.
 
@@ -135,13 +125,14 @@ class Dataset:
             path: Path to save the dataset.
 
         Returns:
-            AppFuture: Future representing the completion of the save operation.
+            DataFuture: Future representing the file to which the save operation will write.
         """
         path = psiflow.resolve_and_check(Path(path))
-        _ = copy_data_future(
+        future = copy_data_future(
             inputs=[self.extxyz],
             outputs=[File(str(path))],
         )
+        return future.outputs[0]
 
     def geometries(self) -> AppFuture:
         """
@@ -215,7 +206,7 @@ class Dataset:
         """
         return get_elements(inputs=[self.extxyz])
 
-    def reset(self):
+    def reset(self) -> Dataset:
         """
         Reset all structures in the dataset.
 
@@ -228,7 +219,7 @@ class Dataset:
         ).outputs[0]
         return Dataset(None, extxyz)
 
-    def clean(self):
+    def clean(self) -> Dataset:
         """
         Clean all structures in the dataset.
 
@@ -260,14 +251,14 @@ class Dataset:
         """
         result = extract_quantities(
             quantities,
-            atom_indices,
-            elements,
+            atom_indices=atom_indices,
+            elements=elements,
             inputs=[self.extxyz],
         )
         if len(quantities) == 1:
-            return unpack_i(result, 0)
+            return result[0]
         else:
-            return tuple([unpack_i(result, i) for i in range(len(quantities))])
+            return tuple([result[i] for i in range(len(quantities))])
 
     def evaluate(
         self,
@@ -291,7 +282,7 @@ class Dataset:
         if not isinstance(outputs, list):  # compute unpacks for only one property
             outputs = [outputs]
         future = insert_quantities(
-            quantities=tuple(computable.outputs),
+            quantity_names=tuple(computable.outputs),
             arrays=combine_futures(inputs=list(outputs)),
             inputs=[self.extxyz],
             outputs=[psiflow.context().new_file("data_", ".xyz")],
@@ -311,7 +302,6 @@ class Dataset:
         Returns:
             Dataset: A new Dataset containing only structures that pass the filter.
         """
-        assert quantity in QUANTITIES
         extxyz = app_filter(
             quantity,
             inputs=[self.extxyz],
@@ -332,7 +322,7 @@ class Dataset:
         ).outputs[0]
         return Dataset(None, extxyz)
 
-    def align_axes(self):
+    def align_axes(self) -> Dataset:
         """
         Adopt a canonical orientation for all (periodic) structures in the dataset.
 
@@ -345,7 +335,7 @@ class Dataset:
         ).outputs[0]
         return Dataset(None, extxyz)
 
-    def split(self, fraction, shuffle=True):  # auto-shuffles
+    def split(self, fraction, shuffle=True) -> tuple[Dataset, Dataset]:     # auto-shuffles
         """
         Split the dataset into training and validation sets.
 
@@ -356,11 +346,12 @@ class Dataset:
         Returns:
             tuple[Dataset, Dataset]: Training and validation datasets.
         """
-        train, valid = get_train_valid_indices(
+        future = get_train_valid_indices(
             self.length(),
             fraction,
             shuffle,
         )
+        train, valid = future[0], future[1]
         return self.__getitem__(train), self.__getitem__(valid)
 
     def assign_identifiers(
@@ -483,15 +474,39 @@ def _aggregate_multiple(
 aggregate_multiple = python_app(_aggregate_multiple, executors=["default_threads"])
 
 
+@typeguard.typechecked
+def _apply(
+    arg: Union[Dataset, DataFuture, AppFuture[list], list, AppFuture, Geometry],
+    apply_apps: tuple[Union[PythonApp, Callable], ...],
+    reduce_func: Union[PythonApp, Callable],
+    **app_kwargs,
+) -> AppFuture:
+    """"""
+    futures = []
+    if isinstance(arg, Dataset):
+        geoms, inputs = None, [arg.extxyz]
+    elif isinstance(arg, DataFuture):
+        geoms, inputs = None, [arg]
+    else:
+        geoms, inputs = arg, []
+    for app in apply_apps:
+        future = app(
+            geoms,
+            inputs=inputs,
+            **app_kwargs
+        )
+        futures.append(future)
+    return reduce_func(*futures)
+
+
 @join_app
 @typeguard.typechecked
 def batch_apply(
-    apply_apps: tuple[Union[PythonApp, Callable]],
-    arg: Union[Dataset, list[Geometry]],
+    apply_apps: tuple[Union[PythonApp, Callable], ...],
+    arg: Dataset,
     batch_size: int,
     length: int,
-    outputs: list = [],
-    reduce_func: Optional[PythonApp] = None,
+    reduce_func: Union[PythonApp, Callable],
     **app_kwargs,
 ) -> AppFuture:
     """
@@ -499,10 +514,9 @@ def batch_apply(
 
     Args:
         apply_apps: Tuple of PythonApps or Callables to apply.
-        arg: Dataset or list of Geometries to process.
+        arg: Dataset to process.
         batch_size: Size of each batch.
         length: Total number of items to process.
-        outputs: List of output files.
         reduce_func: Optional function to reduce results.
         **app_kwargs: Additional keyword arguments for the apps.
 
@@ -517,38 +531,14 @@ def batch_apply(
     future = batch_frames(batch_size, inputs=[arg.extxyz], outputs=batches)
     output_futures = []
     for i in range(nbatches):
-        futures = []
-        for app in apply_apps:
-            f = app(
-                None,
-                inputs=[future.outputs[i]],
-                **app_kwargs,
-            )
-            futures.append(f)
-        reduced = reduce_func(*futures)
-        output_futures.append(reduced)
-    future = concatenate_multiple(*output_futures)
-    return future
-
-
-@python_app(executors=["default_threads"])
-def get_length(arg):
-    """
-    Get the length of the input argument.
-
-    Args:
-        arg: Input to get the length of.
-
-    Returns:
-        int: Length of the input.
-
-    Note:
-        This function is wrapped as a Parsl app and executed using the default_threads executor.
-    """
-    if isinstance(arg, list):
-        return len(arg)
-    else:
-        return 1
+        output_future = _apply(
+            arg=future.outputs[i],
+            apply_apps=apply_apps,
+            reduce_func=reduce_func,
+            **app_kwargs
+        )
+        output_futures.append(output_future)
+    return concatenate_multiple(*output_futures)
 
 
 @typeguard.typechecked
@@ -575,39 +565,24 @@ def compute(
     if type(outputs_) is str:
         outputs_ = [outputs_]
     if batch_size is not None:
-        if isinstance(arg, Dataset):
-            length = arg.length()
-        else:
-            length = get_length(arg)
+        if not isinstance(arg, Dataset):
             # convert to Dataset for convenience
             arg = Dataset(arg)
         future = batch_apply(
             apply_apps,
             arg,
             batch_size,
-            length,
+            arg.length(),                   # batch_apply must be app
             outputs_=outputs_,
             reduce_func=reduce_func,
         )
     else:
-        futures = []
-        if isinstance(arg, Dataset):
-            for app in apply_apps:
-                future = app(
-                    None,
-                    outputs_=outputs_,
-                    inputs=[arg.extxyz],
-                )
-                futures.append(future)
-        else:
-            for app in apply_apps:
-                future = app(
-                    arg,
-                    outputs_=outputs_,
-                    inputs=[],
-                )
-                futures.append(future)
-        future = reduce_func(*futures)
+        future = _apply(
+            arg=arg,
+            apply_apps=apply_apps,
+            reduce_func=reduce_func,
+            outputs_=outputs_
+        )
     if len(outputs_) == 1:
         return future[0]
     else:
@@ -644,4 +619,6 @@ class Computable:
         Returns:
             Union[list[AppFuture], AppFuture]: Future(s) representing computation results.
         """
+        # TODO: returns list[AppFuture] or AppFuture.. Why the difference?
+        # TODO: batch_size defaults to -1. Why? Check for usages
         raise NotImplementedError
