@@ -11,7 +11,7 @@ from parsl.dataflow.futures import AppFuture
 
 import psiflow
 from psiflow.data import Dataset
-from psiflow.geometry import Geometry, NullState
+from psiflow.geometry import Geometry, NULLSTATE
 from psiflow.hamiltonians import Hamiltonian, MixtureHamiltonian, Zero
 from psiflow.utils.apps import unpack_i
 
@@ -179,9 +179,9 @@ def _update_walker(
     state: Geometry,
     start: Geometry,
 ) -> Geometry:
-    from psiflow.geometry import NullState
+    from psiflow.geometry import NULLSTATE
 
-    if (status in [0, 1]) and state != NullState:
+    if (status in [0, 1]) and state != NULLSTATE:
         return state
     else:
         return copy.deepcopy(start)
@@ -198,7 +198,7 @@ def _get_state(
     if status in [0, 1]:
         return geometry
     else:
-        return NullState
+        return NULLSTATE
 
 
 get_state = python_app(_get_state, executors=["default_threads"])

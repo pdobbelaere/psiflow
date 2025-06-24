@@ -7,7 +7,7 @@ from parsl.app.app import bash_app, python_app
 from parsl.dataflow.futures import AppFuture
 
 import psiflow
-from psiflow.geometry import Geometry
+from psiflow.geometry import Geometry, NullState, GeometryLike
 from psiflow.reference.reference import Reference
 from psiflow.utils.apps import copy_app_future
 from psiflow.utils import TMP_COMMAND, CD_COMMAND
@@ -45,22 +45,22 @@ def d3_singlepoint_pre(
 
 @typeguard.typechecked
 def d3_singlepoint_post(
-    geometry: Geometry,
+    geometry: GeometryLike,         # TODO: argument not used
     inputs: list = [],
 ) -> Geometry:
-    from psiflow.geometry import new_nullstate
+    from psiflow.geometry import NullState
 
     with open(inputs[0], "r") as f:
         lines = f.read().split("\n")
 
-    geometry = new_nullstate()
+    geometry = NullState()
     for i, line in enumerate(lines):
         if "CALCULATION SUCCESSFUL" in line:
             natoms = int(lines[i + 1])
             geometry_str = "\n".join(lines[i + 1 : i + 3 + natoms])
             geometry = Geometry.from_string(geometry_str)
             assert geometry.energy is not None
-            geometry.stdout = inputs[0]
+            geometry['stdout'] = inputs[0]
     return geometry
 
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     properties = input_dict["properties"]
 
     atoms = Atoms(
-        numbers=np.copy(geometry.per_atom.numbers),
+        numbers=np.copy(geometry.numbers),
         positions=np.copy(geometry.per_atom.positions),
         cell=np.copy(geometry.cell),
         pbc=geometry.periodic,

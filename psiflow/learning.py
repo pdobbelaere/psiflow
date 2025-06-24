@@ -11,7 +11,7 @@ from parsl.dataflow.futures import AppFuture
 
 import psiflow
 from psiflow.data import Dataset
-from psiflow.geometry import Geometry, NullState, assign_identifier
+from psiflow.geometry import Geometry, NULLSTATE, assign_identifier
 from psiflow.hamiltonians import Hamiltonian, Zero
 from psiflow.metrics import Metrics
 from psiflow.models import Model
@@ -29,7 +29,7 @@ def _compute_error(
 ) -> np.ndarray:
     e_rmse = np.nan
     f_rmse = np.nan
-    if state0 == NullState or state1 == NullState:
+    if state0 == NULLSTATE or state1 == NULLSTATE:
         pass
     elif state0.energy is None or state1.energy is None:
         pass

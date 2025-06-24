@@ -8,7 +8,7 @@ from parsl.app.app import bash_app, python_app
 from parsl.dataflow.futures import AppFuture
 
 import psiflow
-from psiflow.geometry import Geometry, new_nullstate
+from psiflow.geometry import Geometry, NullState
 from psiflow.reference.reference import Reference
 from psiflow.utils.apps import copy_app_future
 from psiflow.utils import TMP_COMMAND, CD_COMMAND
@@ -48,20 +48,20 @@ def gpaw_singlepoint_pre(
 
 @typeguard.typechecked
 def gpaw_singlepoint_post(
-    geometry: Geometry,
+    geometry: Geometry | NullState,
     inputs: list = [],
-) -> Geometry:
+) -> Geometry | NullState:
     with open(inputs[0], "r") as f:
         lines = f.read().split("\n")
 
-    geometry = new_nullstate()  # GPAW parsing doesn't require initial geometry
+    geometry = NullState()  # GPAW parsing doesn't require initial geometry
     for i, line in enumerate(lines):
         if "CALCULATION SUCCESSFUL" in line:
             natoms = int(lines[i + 1])
             geometry_str = "\n".join(lines[i + 1 : i + 3 + natoms])
             geometry = Geometry.from_string(geometry_str)
             assert geometry.energy is not None
-            geometry.stdout = inputs[0]
+            geometry['stdout'] = inputs[0]
     return geometry
 
 

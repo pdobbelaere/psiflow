@@ -15,7 +15,7 @@ from cp2k_input_tools.parser import CP2KInputParserSimplified
 from parsl.app.app import bash_app, python_app
 
 import psiflow
-from psiflow.geometry import Geometry, NullState
+from psiflow.geometry import Geometry, NullState, GeometryLike
 from psiflow.reference.reference import Reference
 from psiflow.utils import TMP_COMMAND, CD_COMMAND
 
@@ -50,7 +50,7 @@ def insert_atoms_in_input(cp2k_input_dict: dict, geometry: Geometry):
 
     coord = []
     cell = {}
-    numbers = geometry.per_atom.numbers
+    numbers = geometry.numbers
     positions = geometry.per_atom.positions
     for i in range(len(geometry)):
         coord.append("{} {} {} {}".format(chemical_symbols[numbers[i]], *positions[i]))
@@ -88,7 +88,7 @@ def set_global_section(cp2k_input_dict: dict, properties: tuple):
 
 def parse_cp2k_output(
     cp2k_output_str: str, properties: tuple, geometry: Geometry
-) -> Geometry:
+) -> GeometryLike:
     natoms = len(geometry)
     all_lines = cp2k_output_str.split("\n")
 
@@ -99,14 +99,14 @@ def parse_cp2k_output(
             skip = 3
             lines = all_lines[i + skip : i + skip + natoms]
     if lines is None:
-        return NullState
+        return NullState()
     assert len(lines) == natoms
     positions = np.zeros((natoms, 3))
     for j, line in enumerate(lines):
         try:
             positions[j, :] = np.array([float(f) for f in line.split()[4:7]])
         except ValueError:  # if positions exploded, CP2K puts *** instead of float
-            return NullState
+            return NullState()
     assert np.allclose(
         geometry.per_atom.positions, positions, atol=1e-2
     )  # accurate up to 0.01 A
@@ -117,7 +117,7 @@ def parse_cp2k_output(
         if line.strip().startswith("ENERGY| Total FORCE_EVAL ( QS ) energy [a.u.]"):
             energy = float(line.split()[-1]) * Ha
     if energy is None:
-        return NullState
+        return NullState()
     geometry.energy = energy
     geometry.per_atom.forces[:] = np.nan
 
@@ -129,7 +129,7 @@ def parse_cp2k_output(
                 skip = 3
                 lines = all_lines[i + skip : i + skip + natoms]
         if lines is None:
-            return NullState
+            return NullState()
         assert len(lines) == natoms
         forces = np.zeros((natoms, 3))
         for j, line in enumerate(lines):
@@ -179,21 +179,21 @@ def cp2k_singlepoint_pre(
 
 @typeguard.typechecked
 def cp2k_singlepoint_post(
-    geometry: Geometry,
+    geometry: GeometryLike,
     properties: tuple = (),
     inputs: list = [],
-) -> Geometry:
-    from psiflow.geometry import NullState, new_nullstate
+) -> GeometryLike:
+    from psiflow.geometry import NullState, NULLSTATE
     from psiflow.reference._cp2k import parse_cp2k_output
 
     with open(inputs[0], "r") as f:
         cp2k_output_str = f.read()
     geometry = parse_cp2k_output(cp2k_output_str, properties, geometry)
-    if geometry != NullState:
-        geometry.stdout = inputs[0]
+    if geometry != NULLSTATE:
+        geometry['stdout'] = inputs[0]
     else:  # a little hacky
-        geometry = new_nullstate()
-        geometry.stdout = inputs[0]
+        geometry = NullState()
+        geometry['stdout'] = inputs[0]
     return geometry
 
 

@@ -30,7 +30,7 @@ def check_forces(
     exceeded = np.linalg.norm(forces, axis=1) > max_force
     if np.sum(exceeded):
         indices = np.arange(len(geometry))[exceeded]
-        numbers = geometry.per_atom.numbers[exceeded]
+        numbers = geometry.numbers[exceeded]
         symbols = [chemical_symbols[n] for n in numbers]
         raise ForceMagnitudeException(
             "\nforce exceeded {} eV/A for atoms {}"

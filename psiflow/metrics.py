@@ -73,8 +73,6 @@ def _parse_walker_log(
     # check for additional columns : phase, logprob, delta, order parameters
     identifiers, phases, logprobs, deltas = _extract_quantities(
         ("identifier", "phase", "logprob", "delta"),
-        None,
-        None,
         *states,
     )
     if not all([len(p) == 0 for p in phases]):
@@ -90,8 +88,6 @@ def _parse_walker_log(
         dtypes.append((name, np.float_))
     order_parameters = _extract_quantities(
         tuple(order_names),
-        None,
-        None,
         *states,
     )
 
@@ -390,15 +386,15 @@ def _update_logs(
     data0 = _read_frames(inputs=[inputs[1]])
     data1 = _read_frames(inputs=[inputs[2]])
 
-    energy0 = _extract_quantities(("per_atom_energy",), None, None, *data0)[0]
-    energy1 = _extract_quantities(("per_atom_energy",), None, None, *data1)[0]
+    energy0 = _extract_quantities(("per_atom_energy",), *data0)[0]
+    energy1 = _extract_quantities(("per_atom_energy",), *data1)[0]
     e_rmse = _compute_rmse(energy0, energy1, reduce=False)
 
-    forces0 = _extract_quantities(("forces",), None, None, *data0)[0]
-    forces1 = _extract_quantities(("forces",), None, None, *data1)[0]
+    forces0 = _extract_quantities(("forces",), *data0)[0]
+    forces1 = _extract_quantities(("forces",), *data1)[0]
     f_rmse = _compute_rmse(forces0, forces1, reduce=False)
 
-    identifiers = _extract_quantities(("identifier",), None, None, *data0)[0]
+    identifiers = _extract_quantities(("identifier",), *data0)[0]
     assert np.all(identifiers >= 0)
     indices = np.argsort(identifiers)
 

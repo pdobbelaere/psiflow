@@ -12,7 +12,7 @@ from ase import Atoms
 from ase.data import atomic_masses, chemical_symbols
 from ase.units import fs, kJ, mol, nm
 
-from psiflow.geometry import Geometry, NullState, create_outputs
+from psiflow.geometry import Geometry, NULLSTATE, create_outputs
 
 
 @typeguard.typechecked
@@ -31,18 +31,20 @@ class Function:
         geometries: list[Geometry],
     ) -> dict[str, float | np.ndarray]:
         """Evaluate multiple geometries and merge data into single arrays"""
-        value, grad_pos, grad_cell = create_outputs(
+        data, _ = create_outputs(
             self.outputs,
             geometries,
         )
         for i, geometry in enumerate(geometries):
-            if geometry == NullState:
+            if geometry == NULLSTATE:
                 continue
             out = self(geometry)
-            value[i] = out['energy']
-            grad_pos[i, :len(geometry)] = out['forces']
-            grad_cell[i] = out['stress']
-        return {"energy": value, "forces": grad_pos, "stress": grad_cell}
+            data['energy'][i] = out['energy']
+            data['forces'][i, :len(geometry)] = out['forces']
+            data['stress'][i] = out['stress']
+
+        data['energy'] = data['energy'][:, 0]       # make 'energy' array 1D
+        return data
 
 
 @dataclass
@@ -119,7 +121,7 @@ class PlumedFunction(EnergyFunction):
         # input system
         plumed_ = self.plumed_instances[key]
         plumed_.cmd("setStep", 0)
-        masses = np.array([atomic_masses[n] for n in geometry.per_atom.numbers])
+        masses = np.array([atomic_masses[n] for n in geometry.numbers])
         plumed_.cmd("setMasses", masses)
         copied_positions = geometry.per_atom.positions.astype(np.float64, copy=True)
         plumed_.cmd("setPositions", copied_positions)
@@ -144,7 +146,7 @@ class PlumedFunction(EnergyFunction):
 
     @staticmethod
     def _geometry_to_key(geometry: Geometry) -> tuple:
-        return tuple([geometry.periodic]) + tuple(geometry.per_atom.numbers)
+        return tuple([geometry.periodic]) + tuple(geometry.numbers)
 
 
 @typeguard.typechecked
@@ -221,8 +223,9 @@ class MACEFunction(EnergyFunction):
         logging.getLogger("").removeHandler(logging.getLogger("").handlers[0])
 
     def get_atomic_energy(self, geometry):
+        # TODO: this is a duplicate function
         total = 0
-        numbers, counts = np.unique(geometry.per_atom.numbers, return_counts=True)
+        numbers, counts = np.unique(geometry.numbers, return_counts=True)
         for idx, number in enumerate(numbers):
             symbol = chemical_symbols[number]
             try:
@@ -250,7 +253,7 @@ class MACEFunction(EnergyFunction):
         cell = np.copy(geometry.cell) if geometry.periodic else None
         atoms = Atoms(
             positions=geometry.per_atom.positions,
-            numbers=geometry.per_atom.numbers,
+            numbers=geometry.numbers,
             cell=cell,
             pbc=geometry.periodic,
         )

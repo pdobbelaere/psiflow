@@ -12,7 +12,7 @@ from parsl.dataflow.futures import AppFuture
 
 import psiflow
 from psiflow.data import Computable, Dataset
-from psiflow.geometry import Geometry, NullState
+from psiflow.geometry import Geometry, NullState, NULLSTATE
 from psiflow.utils.apps import copy_app_future, unpack_i
 
 logger = logging.getLogger(__name__)  # logging per module
@@ -42,14 +42,14 @@ def get_minimum_energy(element, configs, *energies):
 
 @typeguard.typechecked
 def _nan_if_unsuccessful(
-    geometry: Geometry,
-    result: Geometry,
+    geometry: Geometry | NullState,
+    result: Geometry | NullState,
 ) -> Geometry:
-    if result == NullState:
+    if result == NULLSTATE:
         geometry.energy = None
         geometry.per_atom.forces[:] = np.nan
         geometry.per_atom.stress = None
-        geometry.stdout = result.stdout
+        # geometry.stdout = result.stdout       # TODO: fix this again
         return geometry
     else:
         return result
@@ -61,11 +61,11 @@ nan_if_unsuccessful = python_app(_nan_if_unsuccessful, executors=["default_threa
 @join_app
 @typeguard.typechecked
 def evaluate(
-    geometry: Geometry,
+    geometry: Geometry | NullState,
     reference: Reference,
 ) -> AppFuture:
-    if geometry == NullState:
-        return copy_app_future(NullState)
+    if geometry == NULLSTATE:
+        return copy_app_future(geometry)
     else:
         future = reference.app_pre(
             geometry,
@@ -92,8 +92,6 @@ def compute_dataset(
     evaluated = [evaluate(unpack_i(geometries, i), reference) for i in range(length)]
     future = extract_quantities(
         tuple(reference.outputs),
-        None,
-        None,
         *evaluated,
     )
     return future
