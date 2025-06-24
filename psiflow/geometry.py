@@ -1,8 +1,11 @@
 from __future__ import annotations  # necessary for type-guarding class methods
 
 import io
+import sys
+import warnings
 from pathlib import Path
-from typing import Optional, Union
+from dataclasses import dataclass, field
+from typing import Optional, Union, Sequence, Any
 
 import numpy as np
 import typeguard
@@ -12,40 +15,10 @@ from ase.io.extxyz import key_val_dict_to_str, key_val_str_to_dict_regex
 from parsl.app.app import python_app
 
 import psiflow
+from psiflow.quantities import quantities, Quantity
 
-# TODO: why do we use a [0]-cell instead of None for nonperiodic structures?
 
-per_atom_dtype = np.dtype(
-    [
-        ("numbers", np.uint8),
-        ("positions", np.float64, (3,)),
-        ("forces", np.float64, (3,)),
-    ]
-)
-
-STRUCTURAL_QUANTITIES = (
-    'positions',
-    'numbers',
-    'cell',
-)
-PES_QUANTITIES = (
-    'energy',
-    'forces',
-    'stress'
-)
-DERIVED_QUANTITIES = (
-    'per_atom_energy',
-)
-METADATA_QUANTITIES = (
-    'identifier',
-    'stdout',
-)
-_UNUSED_QUANTITIES = (
-    "delta",
-    "logprob",
-    "phase",
-)
-QUANTITIES = STRUCTURAL_QUANTITIES + PES_QUANTITIES + DERIVED_QUANTITIES + METADATA_QUANTITIES
+chemical_symbols = np.array(chemical_symbols)
 
 
 @typeguard.typechecked
@@ -62,15 +35,14 @@ class Geometry:
         energy (Optional[float]): Total energy of the system.
         stress (Optional[np.ndarray]): Stress tensor of the system.
         metadata (dict): Dictionary to store meta information.
-        extra (dict): Dictionary to store custom quantities.
-    """
 
+    Additional quantities can be stored through constructor kwargs
+    """
     per_atom: np.recarray
     cell: np.ndarray
     energy: Optional[float]
     stress: Optional[np.ndarray]
     metadata: dict
-    extra: dict
 
     def __init__(
         self,
@@ -79,28 +51,45 @@ class Geometry:
         energy: Optional[float] = None,
         stress: Optional[np.ndarray] = None,
         metadata: Optional[dict] = None,
-        extra: Optional[dict] = None,
+        **kwargs
     ):
         """
         Initialize a Geometry instance, though the preferred way of instantiating
         proceeds via the `from_data` or `from_atoms` class methods
         """
-        self.per_atom = per_atom.astype(per_atom_dtype)  # copies data
+        self.per_atom = per_atom.astype(quantities.per_atom_dtypes)     # copies data
+        # TODO: why do we use a [0]-cell instead of None for nonperiodic structures?
         self.cell = cell.astype(np.float64)
         assert self.cell.shape == (3, 3)
         self.energy = energy
         self.stress = stress
         self.metadata = metadata or {}
-        self.extra = extra or {}
+
+        # TODO: this warning needs to be more clear?
+        # TODO: initialise all quantities with default values already?
+        for key, value in kwargs.items():
+            if key not in quantities.all:
+                warnings.warn(f'Psiflow does not know the Quantity "{key}". This will lead to problems..')
+            setattr(self, key, value)
+
+        # TODO: temporary measure to ease the transition
+        self.order = self.metadata
+
+    def __getitem__(self, item: str):
+        return self.metadata[item]  # TODO: access metadata as dict makes sense?
+
+    def __setitem__(self, item: str, value) -> None:
+        self.metadata[item] = value
 
     def reset(self) -> None:
         """
         Reset all computed properties of the geometry to their default values.
         """
-        self.per_atom.forces[:] = np.nan
-        self.energy, self.stress = None, None
-        for key in self.extra:
-            setattr(self, key, None)
+        for q in quantities.resettable:
+            if q.per_atom:
+                self.per_atom[q.name] = q.default
+            else:
+                setattr(self, q.name, q.default)
 
     def clean(self) -> None:
         """
@@ -121,8 +110,8 @@ class Geometry:
         """
         if (
             isinstance(other, Geometry) and
-            len(self) != len(other) and
-            self.periodic != other.periodic and
+            len(self) == len(other) and
+            self.periodic == other.periodic and
             np.allclose(self.per_atom.numbers, other.per_atom.numbers) and
             np.allclose(self.per_atom.positions, other.per_atom.positions) and
             np.allclose(self.cell, other.cell)
@@ -157,33 +146,37 @@ class Geometry:
             str: String representation of the geometry.
         """
         if self.periodic:
-            lattice_str = 'Lattice={} pbc="T T T"'.format(
-                ' '.join([f'{x:.8f}' for x in np.reshape(self.cell.T, 9, order='F')])
+            cell = self.cell.T      # transpose because key_val_dict_to_str flattens in Fortran order
+            lattice_str = 'Lattice="{}" pbc="T T T"'.format(
+                ' '.join([f'{x:.8f}' for x in np.reshape(cell, 9, order='F')])
             )
         else:
             lattice_str = 'pbc="F F F" '
 
-        write_forces = not np.any(np.isnan(self.per_atom.forces))
+        write_property, write_fmts = [], ['%-2s'] + ['%16.8f'] * 3
         properties_str = "Properties=species:S:1:pos:R:3"
-        if write_forces:
-            properties_str += ":forces:R:3"
+        for q in quantities.per_atom[2:]:
+            write = not np.any(np.isnan(self.per_atom[q.name]))
+            if write:
+                property_str, fmt = _quantity_to_extxyz(q)
+                write_property.append(q)
+                properties_str += property_str
+                write_fmts.extend([fmt] * q.shape[0])
 
         values_dict = (
-            {'energy': self.energy, 'stress': self.stress} | self.extra |
-            {f'meta_{k}': v for k, v in self.metadata.items()}
+            {q.name: getattr(self, q.name, q.default) for q in quantities.write_to_header} |
+            _format_metadata(self.metadata)
         )
         key_val_str = key_val_dict_to_str({k: v for k, v in values_dict.items() if _check_value(v)})
         header = f'{lattice_str} {properties_str} {key_val_str}'
 
-        symbols = np.array([chemical_symbols[_] for _ in self.per_atom.numbers]).reshape(-1, 1)
+        symbols = chemical_symbols[self.per_atom.numbers]
         data = [symbols, self.per_atom.positions]
-        fmts = ['%-2s'] + ['%16.8f'] * 3
-        if write_forces:
-            data.append(self.per_atom.forces)
-            fmts += ['%16.8f'] * 3
+        for q in write_property:
+            data.append(self.per_atom[q.name])
         arr = np.concatenate(data, axis=1, dtype='O')
         s = io.BytesIO()
-        np.savetxt(s, arr, fmt=' '.join(fmts))
+        np.savetxt(s, arr, fmt=' '.join(write_fmts))
         body = s.getvalue().decode('UTF-8')
 
         return f'{len(self)}\n{header}\n{body}'
@@ -209,7 +202,7 @@ class Geometry:
         return Geometry.from_string(self.to_string())
 
     @classmethod
-    def from_string(cls, s: str, natoms: Optional[int] = None) -> Optional[Geometry]:
+    def from_string(cls, s: str, natoms: Optional[int] = None) -> Optional[GeometryLike]:
         """
         Create a Geometry instance from a string representation in extended XYZ format.
 
@@ -223,18 +216,22 @@ class Geometry:
         if len(s) == 0:
             return None
         if natoms:
-            # TODO: what does this do?
+            # TODO: what does this do? Remove natoms arg?
             # i-PI nonperiodic starts with empty -> rstrip!
             print('Geometry.from_string() weirdness')
             s = s.strip()
 
         natoms_str, header, body = s.split('\n', 2)
-        natoms = int(natoms_str)
         comment_dict = key_val_str_to_dict_regex(header)
+
+        if header.startswith(NullState.key):
+            null = NullState(_extract_metadata(comment_dict))
+            null.metadata.update(**_extract_metadata(comment_dict))
+            return null
 
         # read and format per_atom data
         # first 4 columns are always occupied by symbols and positions
-        per_atom_keys = {}
+        per_atom_keys = {'numbers': slice(0, 1), 'positions': slice(1, 4)}
         if "Properties" in comment_dict:
             # TODO: this has to be true, otherwise it was not extxyz
             properties = comment_dict.pop('Properties').split(":")[6:]
@@ -245,33 +242,28 @@ class Geometry:
                 per_atom_keys[name] = slice(count, count + ncolumns)
                 count += ncolumns
 
-        # TODO: what about other per-atom quantities?
+        natoms = int(natoms_str)
         data = body.split()
         assert len(data) % natoms == 0, 'String is not in proper extxyz format'
         width = len(data) // natoms
         data[::width] = [atomic_numbers[symbol] for symbol in data[::width]]
-        arr = np.array([data[i * width: (i + 1) * width] for i in range(natoms)], dtype=float)
-        per_atom = np.recarray(natoms, dtype=per_atom_dtype)
-        per_atom.numbers = arr[:, 0]
-        per_atom.positions = arr[:, 1:4]
-        if 'forces' in per_atom_keys:
-            per_atom['forces'] = arr[:, per_atom_keys['forces']]
+        arr = np.array(data, dtype=float).reshape(-1, width)
+        per_atom = np.recarray(natoms, dtype=quantities.per_atom_dtypes)
+        for q in quantities.per_atom:
+            if q.name in per_atom_keys:
+                columns = per_atom_keys[q.name]
+                per_atom[q.name] = arr[:, columns]
+            else:
+                per_atom[q.name] = q.default
 
-        kwargs = dict(
-            cell=comment_dict.pop('Lattice', np.zeros((3, 3))).T,  # transposed!
-            energy=comment_dict.pop('energy', None),
-            stress=comment_dict.pop('stress', None),
-        )
-        metadata = {}
-        for key, value in comment_dict.items():
-            if key.startswith('meta_'):
-                metadata[key[5:]] = value
-        extra = {key: value for key, value in comment_dict.items() if key != 'pbc'}
+        # transpose cell to undo key_val_str_to_dict_regex Fortran ordering
+        kwargs = {'cell': comment_dict.pop('Lattice', np.zeros((3, 3))).T}
+        metadata = _extract_metadata(comment_dict)
+        for q in quantities.write_to_header:
+            if q.name not in metadata:
+                kwargs[q.name] = comment_dict.pop(q.name, q.default)
 
-        geometry = cls(
-            per_atom=per_atom, metadata=metadata, extra=extra, **kwargs
-        )
-        return geometry
+        return cls(per_atom=per_atom, metadata=metadata, **kwargs)
 
     @classmethod
     def load(cls, path_xyz: Union[Path, str]) -> Geometry:
@@ -334,7 +326,12 @@ class Geometry:
         Returns:
          np.ndarray: Array of atomic masses.
         """
-        return np.array([atomic_masses[n] for n in self.per_atom.numbers])
+        return atomic_masses[self.numbers]
+
+    @property
+    def numbers(self) -> np.ndarray[int]:
+        """Return atomic numbers as a flattened array."""
+        return self.per_atom.numbers.flatten()
 
     @classmethod
     def from_data(
@@ -354,14 +351,12 @@ class Geometry:
         Returns:
             Geometry: A new Geometry instance.
         """
-        per_atom = np.recarray(len(numbers), dtype=per_atom_dtype)
-        per_atom.numbers[:] = numbers
+        per_atom = np.recarray(len(numbers), dtype=quantities.per_atom_dtypes)
+        per_atom.numbers[:] = numbers.reshape(-1, 1)
         per_atom.positions[:] = positions
-        per_atom.forces[:] = np.nan
-        if cell is not None:
-            cell = cell.copy()
-        else:
-            cell = np.zeros((3, 3))
+        for q in quantities.per_atom[2:]:
+            per_atom[q.name] = q.default
+        cell = cell.copy() if cell is not None else np.zeros((3, 3))
         return Geometry(per_atom, cell)
 
     @classmethod
@@ -375,51 +370,91 @@ class Geometry:
         Returns:
             Geometry: A new Geometry instance.
         """
-        geometry = cls.from_data(
-            atoms.numbers,
-            atoms.positions,
-            atoms.cell.array if np.any(atoms.pbc) else None
-        )
         # ASE is idiotic here
-        data = {k: v for k, v in atoms.arrays.items() if k not in ('numbers', 'positions')} | atoms.info
+        data = {k: v for k, v in atoms.arrays.items()} | atoms.info
         if atoms.calc is not None:
             data |= atoms.calc.results
 
-        if 'forces' in data:
-            geometry.per_atom.forces[:] = data.pop('forces')
-        for key, value in data.items():
-            if key in ('energy', 'stress'):
-                setattr(geometry, key, value)
-            elif key in METADATA_QUANTITIES:
-                geometry.metadata[key] = value
-            elif isinstance(value, np.ndarray) and value.shape[0] == len(geometry):
-                print(f'No support for per-atom quantity "{key}"')
-            else:
-                geometry.extra[key] = value
+        geometry = cls.from_data(
+            data.pop('numbers'),
+            data.pop('positions'),
+            atoms.cell.array if np.any(atoms.pbc) else None
+        )
+        for q in [q for q in quantities.per_atom[2:] if q.name in data]:
+            geometry.per_atom[q.name] = data.pop(q.name)
+        for q in quantities.write_to_header:
+            value = data.pop(q.name, q.default)
+            setattr(geometry, q.name, value)
+        geometry.metadata.update(**_extract_metadata(data))
         return geometry
 
 
 def _check_value(value) -> bool:
     if (
         value is None or
+        isinstance(value, float) and np.isnan(value) or
         (isinstance(value, np.ndarray) and np.all(np.isnan(value)))
     ):
         return False
     return True
 
 
-def new_nullstate():
+def _quantity_to_extxyz(quantity: Quantity) -> tuple[str, str]:
+    if np.issubdtype(quantity.dtype, np.integer) or np.issubdtype(quantity.dtype, np.bool_):
+        # ASE replaces logical values with 'T' and 'F' -> treat as int
+        token, fmt = 'I', '%8d'
+    elif np.issubdtype(quantity.dtype, np.floating):
+        token, fmt = 'R', '%16.8f'
+    elif np.issubdtype(quantity.dtype, np.character):
+        token, fmt = 'S', '%16s'
+    # elif np.issubdtype(quantity.dtype, np.bool_):
+    #     token, fmt = 'L', '%8d'
+    else:
+        raise NotImplementedError
+    return f":{quantity.name}:{token}:{quantity.shape[0]}", fmt
+
+
+def _extract_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    return {k[5:]: v for k, v in data.items() if k.startswith('META_')}
+
+
+def _format_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    return {f'META_{k}': v for k, v in data.items()}
+
+
+@dataclass(frozen=True)     # immutable
+class NullState:
     """
-    Create a new null state Geometry.
+    Dummy geometry placeholder that pops up when things went wrong.
 
-    Returns:
-        Geometry: A Geometry instance representing a null state.
+    Attributes:
+        metadata (dict): Dictionary to store meta information.
+
     """
-    return Geometry.from_data(np.zeros(1), np.ones((1, 3)) * np.nan, None)
+    key = 'NULLSTATE'
+    metadata: dict = field(default_factory=lambda: {})
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, NullState)
+
+    def __getitem__(self, item: str):
+        return self.metadata[item]
+
+    def __setitem__(self, item: str, value) -> None:
+        self.metadata[item] = value
+
+    def to_string(self) -> str:
+        key_val_str = key_val_dict_to_str(_format_metadata(self.metadata))
+        string = '\n'.join([
+            '1',
+            f'{self.key} pbc="F F F"  Properties=species:S:1:pos:R:3 {key_val_str}',
+            'X        0.00000000       0.00000000       0.00000000', ''
+        ])
+        return string
 
 
-# use universal dummy state
-NullState = new_nullstate()
+GeometryLike = Geometry | NullState
+NULLSTATE = NullState()
 
 
 def is_lower_triangular(cell: np.ndarray) -> bool:
@@ -528,7 +563,7 @@ def get_mass_matrix(geometry: Geometry) -> np.ndarray:
         np.ndarray: Mass matrix.
     """
     masses = np.repeat(
-        np.array([atomic_masses[n] for n in geometry.per_atom.numbers]),
+        np.array([atomic_masses[n] for n in geometry.numbers]),
         3,
     )
     sqrt_inv = 1 / np.sqrt(masses)
@@ -569,64 +604,59 @@ def mass_unweight(hessian: np.ndarray, geometry: Geometry) -> np.ndarray:
     return hessian / get_mass_matrix(geometry)
 
 
-def create_outputs(quantities: list[str], data: list[Geometry]) -> list[np.ndarray]:
+@typeguard.typechecked
+def get_unique_numbers(states: Sequence[Geometry]) -> set[int]:
+    """Returns a set of unique atom numbers found across all states."""
+    return set().union(*[np.unique(geom.numbers).tolist() for geom in states])
+
+
+@typeguard.typechecked
+def get_atomic_energy(geometry: Geometry, atomic_energies: dict[str, float]) -> float:
+    """Compute the total atomic energy based on provided single atom energies."""
+    total = 0
+    numbers, counts = np.unique(geometry.numbers, return_counts=True)
+    for number, count in zip(numbers, counts):
+        symbol = chemical_symbols[number]
+        try:
+            total += count * atomic_energies[symbol]
+        except KeyError:
+            warnings.warn(f'No atomic energy value for symbol "{symbol}". Are you sure?')
+    return float(total)
+
+
+@typeguard.typechecked
+def create_outputs(quantity_names: Sequence[str],
+                   data: Sequence[GeometryLike]) -> tuple[dict[str, np.ndarray], set[str]]:
     """
     Create output arrays for specified quantities from a list of Geometry instances.
 
     Args:
-        quantities (list[str]): List of quantity names to extract.
-        data (list[Geometry]): List of Geometry instances.
+        quantity_names (Sequence[str]): Sequence of quantity names to extract.
+        data (Sequence[Geometry]): Sequence of Geometry instances.
 
     Returns:
-        list[np.ndarray]: List of arrays containing the requested quantities.
+        tuple[dict[str, np.ndarray], set[str]]: Dict of arrays with default values for every registered quantity
+        and the set of unknown quantities
     """
-    order_names = list(set([k for g in data for k in g.order]))
-    assert all([q in QUANTITIES + order_names for q in quantities])
-    natoms = np.array([len(geometry) for geometry in data], dtype=int)
-    max_natoms = np.max(natoms)
-    nframes = len(data)
-    nprob = 0
-    max_phase = 0
-    for state in data:
-        if state.logprob is not None:
-            nprob = max(len(state.logprob), nprob)
-        if state.phase is not None:
-            max_phase = max(len(state.phase), max_phase)
+    known_quantities = {k for k in quantity_names if k in quantities.all}
+    natoms = [len(g) for g in data if g != NULLSTATE]
+    max_natoms, nframes = np.max(natoms), len(data)
 
-    arrays = []
-    for quantity in quantities:
-        if quantity in ["positions", "forces"]:
-            array = np.empty((nframes, max_natoms, 3), dtype=np.float64)
-            array[:] = np.nan
-        elif quantity in ["cell", "stress"]:
-            array = np.empty((nframes, 3, 3), dtype=np.float64)
-            array[:] = np.nan
-        elif quantity in ["numbers"]:
-            array = np.empty((nframes, max_natoms), dtype=np.uint8)
-            array[:] = 0
-        elif quantity in ["energy", "delta", "per_atom_energy"]:
-            array = np.empty((nframes,), dtype=np.float64)
-            array[:] = np.nan
-        elif quantity in ["phase"]:
-            array = np.empty((nframes,), dtype=(np.unicode_, max_phase))
-            array[:] = ""
-        elif quantity in ["logprob"]:
-            array = np.empty((nframes, nprob), dtype=np.float64)
-            array[:] = np.nan
-        elif quantity in ["identifier"]:
-            array = np.empty((nframes,), dtype=np.int64)
-            array[:] = -1
-        elif quantity in order_names:
-            array = np.empty((nframes,), dtype=np.float64)
-            array[:] = np.nan
+    array_dict = {}
+    for name in known_quantities:
+        q = quantities.all[name]
+        shape = (max_natoms, *q.shape) if q.per_atom else q.shape
+        if np.issubdtype(q.dtype, np.character):
+            array = np.empty((nframes, *shape), dtype=object)       # string arrays require fixed length
         else:
-            raise AssertionError("missing quantity in if/else")
-        arrays.append(array)
-    return arrays
+            array = np.empty((nframes, *shape), dtype=q.dtype)
+        array[:] = q.default
+        array_dict[name] = array
+    return array_dict, {k for k in quantity_names if k not in quantities.all}
 
 
 def _assign_identifier(
-    state: Geometry,
+    state: GeometryLike,
     identifier: int,
     discard: bool = False,
 ) -> tuple[Geometry, int]:
@@ -641,12 +671,10 @@ def _assign_identifier(
     Returns:
         tuple[Geometry, int]: Updated Geometry and next available identifier.
     """
-    if (state == NullState) or discard:
+    if (state == NULLSTATE) or discard or 'identifier' in state.metadata:
         return state, identifier
-    else:
-        assert state.identifier is None
-        state.identifier = identifier
-        return state, identifier + 1
+    state['identifier'] = identifier
+    return state, identifier + 1
 
 
 assign_identifier = python_app(_assign_identifier, executors=["default_threads"])
@@ -654,8 +682,8 @@ assign_identifier = python_app(_assign_identifier, executors=["default_threads"]
 
 @typeguard.typechecked
 def _check_equality(
-    state0: Geometry,
-    state1: Geometry,
+    state0: GeometryLike,
+    state1: GeometryLike,
 ) -> bool:
     """
     Check if two Geometry instances are equal.
@@ -671,3 +699,5 @@ def _check_equality(
 
 
 check_equality = python_app(_check_equality, executors=["default_threads"])
+
+
