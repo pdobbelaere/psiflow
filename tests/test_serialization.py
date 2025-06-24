@@ -10,7 +10,7 @@ from parsl.dataflow.futures import AppFuture
 
 import psiflow
 from psiflow.data import Dataset
-from psiflow.geometry import Geometry, NullState, new_nullstate
+from psiflow.geometry import Geometry, NullState, NULLSTATE
 from psiflow.utils.apps import copy_app_future
 
 
@@ -27,8 +27,8 @@ def test_serial_simple(tmp_path):
         bam: Optional[SomeSerial]
         bao: SomeSerial
         bap: list[SomeSerial, ...]
-        baq: Union[Geometry, AppFuture]
-        bas: Geometry
+        baq: Union[Geometry, NullState, AppFuture]
+        bas: Union[Geometry, NullState]
 
         def __init__(self, **kwargs):
             for key, value in kwargs.items():
@@ -42,8 +42,8 @@ def test_serial_simple(tmp_path):
         bam=None,
         bao=SomeSerial(),
         bap=[SomeSerial(), SomeSerial()],
-        baq=copy_app_future(NullState),
-        bas=new_nullstate(),
+        baq=copy_app_future(NULLSTATE),
+        bas=NullState(),
     )
     assert instance.foo == 3
     assert instance._attrs["foo"] == 3
@@ -77,12 +77,12 @@ def test_serial_simple(tmp_path):
     assert type(instance_.bap[0]) is SomeSerial
     assert type(instance_.bap[1]) is SomeSerial
     assert id(instance) != id(instance_)
-    assert isinstance(instance_.baq, Geometry)
-    assert instance_.baq == NullState
-    assert instance_.bas == NullState
+    # assert isinstance(instance_.baq, Geometry)
+    assert instance_.baq == NULLSTATE
+    assert instance_.bas == NULLSTATE
 
     # check classes created before test execution, e.g. Dataset
-    data = Dataset([NullState])
+    data = Dataset([NULLSTATE])
     assert "extxyz" in data._files
     assert len(data._attrs) == 0
     assert len(data._serial) == 0
@@ -103,7 +103,7 @@ def test_serial_simple(tmp_path):
     assert data_dict["Dataset"]["_files"]["extxyz"] == data.extxyz.filepath
 
     # test copy_to serialization
-    data = Dataset([NullState])
+    data = Dataset([NULLSTATE])
     data.extxyz.result()
     filename = Path(data.extxyz.filepath).name
     assert os.path.exists(data.extxyz.filepath)

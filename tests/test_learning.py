@@ -3,7 +3,7 @@ from parsl.data_provider.files import File
 
 import psiflow
 from psiflow.data import Dataset
-from psiflow.geometry import new_nullstate
+from psiflow.geometry import NullState
 from psiflow.hamiltonians import EinsteinCrystal
 from psiflow.learning import Learning, evaluate_outputs
 from psiflow.metrics import Metrics, _create_table, parse_walker_log, reconstruct_dtypes
@@ -58,10 +58,10 @@ def test_metrics(dataset_h2):
     states[3].result().identifier = None
     states[8].result().phase = "asldfkjasldfkjsadflkj"
     states[4].result().delta = 1.0
-    states[3].result().order["test"] = 4.0
-    states[4].result().order["test"] = 3.0
-    states[5].result().order["a"] = 1.0
-    states[7] = new_nullstate()
+    states[3].result()["test"] = 4.0
+    states[4].result()["test"] = 3.0
+    states[5].result()["a"] = 1.0
+    states[7] = NullState()
     states[1].result().logprob = np.array([-1.0, 1.0])
 
     errors = [np.random.uniform(0, 1, size=2) for i in range(len(states))]
@@ -155,7 +155,7 @@ def test_evaluate_outputs(dataset):
         output.state = data[i]
         output.status = 0
 
-    outputs[3].state = new_nullstate()
+    outputs[3].state = NullState()
     outputs[7].status = 2  # should be null state
 
     identifier = 3

@@ -5,7 +5,6 @@ from ase.units import kJ, mol # type: ignore
 from parsl.data_provider.files import File # type: ignore
 
 import psiflow
-from psiflow.data import Dataset
 from psiflow.functions import (
     EinsteinCrystalFunction,
     HarmonicFunction,
@@ -31,10 +30,10 @@ def test_einstein_crystal(dataset):
         centers=dataset[0].result().per_atom.positions,
         volume=0.0,
     )
+    geometries = dataset[:4].reset().geometries().result()
+    data = function.compute(geometries)
+    energy, forces, stress = data['energy'], data['forces'], data['stress']
 
-    nstates = 4
-    geometries = dataset[:nstates].reset().geometries().result()
-    energy, forces, stress = function.compute(geometries).values()
     assert np.all(energy >= 0)
     assert energy[0] == 0
     assert np.allclose(  # forces point to centers
@@ -134,7 +133,8 @@ CV: VOLUME
 RESTRAINT ARG=CV AT=50 KAPPA=1
 """
     function = PlumedFunction(plumed_input)
-    energy, forces, stress = function.compute(dataset.geometries().result()).values()
+    data = function.compute(dataset.geometries().result())
+    energy, forces, stress = data['energy'], data['forces'], data['stress']
 
     volumes = np.linalg.det(dataset.get("cell").result())
     energy_ = (volumes - 50) ** 2 * (kJ / mol) / 2
@@ -200,8 +200,10 @@ def test_harmonic_function(dataset):
     )
     einstein = EinsteinCrystalFunction(1.0, reference.per_atom.positions)
 
-    energy, forces, _ = function.compute(dataset[:10].geometries().result()).values()
-    energy_, forces_, _ = einstein.compute(dataset[:10].geometries().result()).values()
+    data = function.compute(dataset[:10].geometries().result())
+    energy, forces = data['energy'], data['forces']
+    data = einstein.compute(dataset[:10].geometries().result())
+    energy_, forces_ = data['energy'], data['forces']
 
     assert np.allclose(energy - reference.energy, energy_)
     assert np.allclose(forces_, forces)
