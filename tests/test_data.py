@@ -9,6 +9,7 @@ from parsl.app.futures import DataFuture
 from parsl.data_provider.files import File
 
 import psiflow
+from psiflow.quantities import register_quantity, Type
 from psiflow.data import Dataset, compute_rmse
 from psiflow.data.utils import (
     _read_frames,
@@ -16,7 +17,7 @@ from psiflow.data.utils import (
     get_index_element_mask,
     read_frames,
 )
-from psiflow.geometry import Geometry, NullState, check_equality
+from psiflow.geometry import Geometry, NullState, check_equality, NULLSTATE
 
 
 def test_geometry(tmp_path):
@@ -63,8 +64,7 @@ def test_geometry(tmp_path):
         fake_data.append(atoms)
     fake_data[2].info["energy"] = 1.0
     fake_data[3].arrays["forces"] = np.random.uniform(-3, 3, size=(8, 3))
-    fake_data[1].info["stdout"] = "abcd"
-    fake_data[6].info["logprob"] = np.array([-23.1, 22.1])
+    fake_data[1].info["META_stdout"] = "abcd"
     fake_data[7].cell = np.random.uniform(-3, 4, size=(3, 3))
     fake_data[7].pbc = True
 
@@ -80,7 +80,7 @@ def test_geometry(tmp_path):
         )
         assert np.allclose(
             fake_data[i].numbers,
-            data[i].per_atom.numbers,
+            data[i].numbers,
         )
         assert data[i] == Geometry.from_atoms(fake_data[i])
     assert data[2].energy == 1.0
@@ -90,12 +90,7 @@ def test_geometry(tmp_path):
         data[3].per_atom.forces,
         fake_data[3].arrays["forces"],
     )
-    assert data[1].stdout == "abcd"
-    assert type(data[6].logprob) is np.ndarray
-    assert np.allclose(
-        data[6].logprob,
-        fake_data[6].info["logprob"],
-    )
+    assert data[1]['stdout'] == "abcd"
     assert data[7].periodic
     assert np.allclose(
         data[7].cell,
@@ -127,30 +122,30 @@ def test_geometry(tmp_path):
                 state.stress,
                 state_.stress,
             )
-        assert state.delta == state_.delta
-        assert state.phase == state_.phase
-        if state.logprob is not None:
-            assert np.allclose(state.logprob, state_.logprob)
-        assert state.stdout == state_.stdout
-        assert state.identifier == state.identifier
+        assert state.metadata == state_.metadata
 
     state.save(tmp_path / "geo.xyz")
     state.save(str(tmp_path / "geo.xyz"))
     assert state == Geometry.load(tmp_path / "geo.xyz")
 
+    # check nullstate
+    null = NullState()
+    geom = Geometry.from_string(null.to_string())
+    assert null == geom
+
 
 def test_readwrite_cycle(dataset, tmp_path):
     data = dataset[:4].geometries().result()
-    data[2].order["test"] = 324
+    data[2].metadata["test"] = 324
     _write_frames(*data, outputs=[str(tmp_path / "test.xyz")])
     loaded = Dataset(data)
-    assert "test" in loaded[2].result().order
+    assert "test" in loaded[2].result().metadata
 
     states = _read_frames(inputs=[str(tmp_path / "test.xyz")])
-    assert "test" in states[2].order
+    assert "test" in states[2].metadata
 
     s = """3
-energy=3.0 phase=c7eq Properties=species:S:1:pos:R:3:momenta:R:3:forces:R:3
+energy=3.0 META_phase=c7eq Properties=species:S:1:pos:R:3:momenta:R:3:forces:R:3
 C 0 1 2 3 4 5 6 7 8
 O 1 2 3 4 5 6 7 8 9
 F 2 3 4 5 6 7 8 9 10
@@ -158,16 +153,16 @@ F 2 3 4 5 6 7 8 9 10
     geometry = Geometry.from_string(s, natoms=None)
     assert len(geometry) == 3
     assert geometry.energy == 3.0
-    assert geometry.phase == "c7eq"
+    assert geometry['phase'] == "c7eq"
     assert not geometry.periodic
     assert np.all(np.logical_not(np.isnan(geometry.per_atom.forces)))
     assert np.allclose(
-        geometry.per_atom.numbers,
+        geometry.numbers,
         np.array([6, 8, 9]),
     )
     assert np.allclose(
         geometry.per_atom.forces,
-        np.array([[6,7,8], [7,8,9], [8,9,10]]),
+        np.array([[6, 7, 8], [7, 8, 9], [8, 9, 10]]),
     )
     s = """7
 
@@ -341,19 +336,19 @@ def test_data_split(dataset):
 
 
 def test_identifier(dataset):
-    data = dataset + Dataset([NullState, NullState, dataset[0]])
+    data = dataset + Dataset([NULLSTATE, NULLSTATE, dataset[0]])
     identifier = data.assign_identifiers(0)
     assert identifier.result() == dataset.length().result() + 1
     assert identifier.result() == data.not_null().length().result()
     for i in range(data.length().result()):
-        if not data[i].result() == NullState:
-            assert data[i].result().identifier < identifier.result()
+        if not data[i].result() == NULLSTATE:
+            assert data[i].result()['identifier'] < identifier.result()
             # assert data[i].result().reference_status
     data = data.clean()  # also removes identifier
     for i in range(data.length().result()):
         s = data[i].result()
-        if not s == NullState:
-            assert s.identifier is None
+        if not s == NULLSTATE:
+            assert 'identifier' not in s.metadata
     identifier = data.assign_identifiers(10)
     assert identifier.result() == 10 + data.not_null().length().result()
     identifier = dataset.assign_identifiers(10)
@@ -363,8 +358,8 @@ def test_identifier(dataset):
     )
     for i in range(dataset.length().result()):
         s = dataset[i].result()
-        if not s == NullState:
-            assert s.identifier >= 10
+        if not s == NULLSTATE:
+            assert s['identifier'] >= 10
 
     identifier = data.assign_identifiers()
     data = data.clean()
@@ -401,8 +396,7 @@ def test_data_offset(dataset):
 def test_data_extract(dataset):
     state = dataset[0].result()
     state.energy = None
-    state.identifier = 0
-    state.delta = 6
+    state['identifier'] = 0
 
     data = dataset[:5] + dataset[-5:] + Dataset([state])
     energy, forces, identifier = data.get("energy", "forces", "identifier")
@@ -418,14 +412,14 @@ def test_data_extract(dataset):
             forces[i][:n, :],
         )
         if identifier[i].item() != -1:
-            assert geometry.identifier == identifier[i]
+            assert geometry['identifier'] == identifier[i]
         if i < 10:
             assert identifier[i] == -1
     assert np.isnan(np.mean(energy))
     assert np.isnan(np.mean(forces))
     psiflow.wait()
 
-    data = dataset[:2] + Dataset([NullState]) + dataset[3:5]
+    data = dataset[:2] + Dataset([NULLSTATE]) + dataset[3:5]
     forces = data.get("forces", elements=["Cu"])
     reference = np.zeros((5, 4, 3))
     reference[2, :] = np.nan  # ensure nan is in same place
@@ -435,7 +429,10 @@ def test_data_extract(dataset):
     # last three atoms are Cu
     forces = np.zeros((5, 4, 3))
     for i in range(5):
-        forces[i, :] = data[i].result().per_atom.forces
+        if (geom := data[i].result()) != NULLSTATE:         # a Nullstate does not contain any data
+            forces[i, :] = geom.per_atom.forces
+        else:
+            forces[i, :] = np.nan
     forces[:, 0] = np.nan
     assert np.allclose(
         value.result(),
@@ -455,7 +452,7 @@ def test_data_extract(dataset):
     forces = np.zeros((5, 4, 3))
     for i in range(5):
         g = data[i].result()
-        if len(g) >= 4:
+        if g != NULLSTATE and len(g) >= 4:
             forces[i, 3] = data[i].result().per_atom.forces[3]
             forces[i, 1] = data[i].result().per_atom.forces[1]
         else:
@@ -469,33 +466,63 @@ def test_data_extract(dataset):
 
     # check order parameters
     s = Geometry.from_string(
-        """
-3
-order_distance=2.3 energy=4
+        """3
+META_distance=2.3 energy=4
 O 0 0 0
 H 1 1 1
 H -1 1 1
 """,
     )
     states = [copy.deepcopy(s) for _ in range(5)]
-
-    states[1].order = {}
-    states[2].order = {"some": 4.2}
-    states[3].order["distance"] = 2.2
+    states[1].metadata = {}
+    states[2].metadata = {"some": 4.2}
+    states[3].metadata["distance"] = 2.2
     data = Dataset(states)
     some, distance = data.get("some", "distance")
     some = some.result()
     distance = distance.result()
-    assert np.isnan(some[1])
+    assert some[1] is None
     assert np.allclose(some[2], 4.2)
     assert np.allclose(distance[0], 2.3)
     assert np.allclose(distance[3], 2.2)
-    assert np.isnan(distance[2])
+    assert distance[2] is None
 
 
 def test_filter(dataset, dataset_h2):
-    data = dataset + dataset_h2 + Dataset([NullState])
+    data = dataset + dataset_h2 + Dataset([NULLSTATE])
     data = data.shuffle()
     assert data.filter("cell").length().result() == dataset.length().result()
     assert data.filter("energy").length().result() == dataset.length().result()
     assert data.filter("forces").length().result() == dataset.length().result()
+
+
+def test_custom_quantities():
+    """"""
+    register_quantity(name='test1', shape=(2,), per_atom=True)
+    register_quantity(name='test2', shape=(1,), dtype=str)
+    register_quantity(name='test3', shape=(1,), type=Type.METADATA, dtype=str)
+    geometry = Geometry.from_data(
+        numbers=np.arange(1, 6),
+        positions=np.random.uniform(0, 1, size=(5, 3)),
+        cell=None,
+    )
+    geometry.per_atom.test1 = np.random.uniform(size=(len(geometry), 2))
+    geometry.test2 = 'testing'
+    geometry.unknown = 'unown'
+    geometry['test3'] = 'metagross'
+
+    geometry2 = Geometry.from_string(geometry.to_string())
+    assert np.allclose(geometry2.per_atom.test1, geometry.per_atom.test1)
+    assert geometry2.test2 == geometry.test2
+    assert not hasattr(geometry2, 'unown')
+    assert geometry2['test3'] == 'metagross'
+
+    data = Dataset([geometry, geometry2])
+    out = data.get('test1', 'test2', 'test3', 'unknown')
+    test1, test2, test3, unknown = [_.result() for _ in out]
+    assert np.allclose(test1[0], geometry.per_atom.test1)
+    assert test2[0] == 'testing'
+    assert test3[0] == 'metagross'
+    assert all([_ is None for _ in unknown])
+
+
