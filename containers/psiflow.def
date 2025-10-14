@@ -1,0 +1,125 @@
+Bootstrap: docker
+From: ubuntu:25.10
+Stage: build
+
+
+%arguments
+	# versions and repositories
+	PYTORCH_PIP_ARGS="torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124"
+	
+    MACE_REPO="https://github.com/acesuit/mace.git@v0.3.5"
+    IPI_REPO="https://github.com/i-pi/i-pi.git@v3.0.0-beta4"
+    PSIFLOW_REPO="https://github.com/molmod/psiflow.git@82fa313"
+    
+    PLUMED_VERSION="2.9.0"
+    
+    # installation details
+    INSTALL_DIR=/usr/local
+    CORES="4"
+
+
+%post
+	# minimal bookkeeping
+	echo "# Date of creation: $(date)" >> $SINGULARITY_ENVIRONMENT
+	
+    # update libraries
+    apt-get update && apt-get install -y \
+        build-essential \
+        cmake \
+        wget \
+        git \
+        curl \
+        zlib1g-dev \
+        libssl-dev \
+        libopenblas-dev \
+        liblapack-dev \
+        libgsl-dev \
+        libfftw3-dev \
+        && apt-get clean 
+
+    # install PLUMED
+    # can use (but works without)
+    # libopenblas-dev liblapack-dev libgsl-dev libfftw3-dev
+    # what about MPI?
+    PLUMED_TAR="v{{ PLUMED_VERSION }}.tar.gz"
+    PLUMED_SOURCE="plumed2-{{ PLUMED_VERSION }}"    
+    wget https://github.com/plumed/plumed2/archive/refs/tags/$PLUMED_TAR \
+        && tar -xzf $PLUMED_TAR \
+        && cd $PLUMED_SOURCE \
+        && ./configure --prefix={{ INSTALL_DIR }}/plumed \
+        && make -j {{ CORES }} \
+        && make install \
+        && cd .. \
+        && rm -rf $PLUMED_TAR $PLUMED_SOURCE
+        
+    # setup PLUMED environment    
+    cat <<-'EOF' >> $SINGULARITY_ENVIRONMENT
+		# PLUMED
+		PATH=/usr/local/plumed/bin:$PATH
+		LD_LIBRARY_PATH=/usr/local/plumed/lib:$LD_LIBRARY_PATH
+		export PLUMED_KERNEL=/usr/local/plumed/lib/libplumedKernel.so
+	EOF
+        
+	# install micromamba
+	curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+	export MAMBA_ROOT_PREFIX={{ INSTALL_DIR }}/micromamba
+	eval "$($(command -v micromamba) shell hook -s posix)"  	# init shell
+	micromamba create -n base
+	
+	# setup micromamba environment    
+    cat <<-'EOF' >> $SINGULARITY_ENVIRONMENT
+		# MICROMAMBA
+		export MAMBA_ROOT_PREFIX={{ INSTALL_DIR }}/micromamba
+		eval "$($(command -v micromamba) shell hook -s posix)" 
+		micromamba activate base
+	EOF
+	
+	# source environment setup
+	. $SINGULARITY_ENVIRONMENT
+	
+	# install python and packages
+	# includes Workqueue, py-plumed, PyTorch, WandB, MACE, i-PI, psiflow, simple-dftd3
+	# colorcet and plotly are used with WandB, but is this necessary?
+	micromamba install -y python=3.10 pip ndcctools simple-dftd3 dftd3-python -c conda-forge
+	pip install --no-cache-dir colorcet plotly wandb plumed 'numpy<2.0.0' && \
+		pip install --no-cache-dir "{{ PYTORCH_PIP_ARGS }}" && \
+		pip install --no-cache-dir git+{{ MACE_REPO }} git+{{ IPI_REPO }} git+{{ PSIFLOW_REPO }}
+	
+	# clean up a bit
+	micromamba clean --all --yes
+	pip cache purge
+	rm -rf /var/lib/apt/lists/* /var/cache/apt/* /root/.cache/*
+	
+    # create dummy entrypoint for legacy reasons
+    cat <<-'EOF' >> /opt/entry.sh
+		#!/bin/bash
+		"$@"
+	EOF
+	chmod +x /opt/entry.sh
+
+
+%test
+    echo "--- Shell init ---"
+    cat $SINGULARITY_ENVIRONMENT
+    echo "--- Shell init ---"
+
+    echo "--- PLUMED setup ---"
+    command -v plumed
+    plumed info --long-version
+    plumed info --configuration
+    echo "--- PLUMED setup ---"
+    
+    echo "--- PYTHON setup ---"
+    pip list
+    work_queue_worker --version
+    python -c "import work_queue; import torch; import mace"
+    echo "--- PYTHON setup ---"
+	
+	
+%labels
+    Author pidobbel
+    Version v4.0.0-final
+    
+    
+%help
+    The main psiflow container for anything MLP-related.

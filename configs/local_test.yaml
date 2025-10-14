@@ -1,6 +1,7 @@
 ---
 parsl_log_level: WARNING
 retries: 0
+container_uri: '/home/pieter/PycharmProjects/Research/workdir/tmp/psiflow_82fa313_cu126.cif'
 make_symlinks: false
 
 ModelEvaluation:
