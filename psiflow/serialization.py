@@ -77,7 +77,9 @@ def serializable(cls):
         else:
             if get_origin(type_hint) is ClassVar:
                 continue  # do nothing for classvars
-            if not inspect.isclass(type_hint):
+            elif get_origin(type_hint)== dict:
+                continue  # temporary hotfix
+            elif not inspect.isclass(type_hint):
                 raise ValueError(
                     "{} is formally not a class ({})".format(type_hint, name)
                 )

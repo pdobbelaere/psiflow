@@ -285,6 +285,125 @@ class MACEFunction(EnergyFunction):
         return format_output(geometry, energy, forces, stress)
 
 
+@dataclass
+class NequIPFunction(EnergyFunction):
+    model_path: str
+    ncores: int
+    device: str
+    dtype: str
+    atomic_energies: dict[str, float]
+    env_vars: Optional[dict[str, str]] = None
+
+    def __post_init__(self):
+        import logging
+        import os
+
+        # import environment variables before any nontrivial imports
+        if self.env_vars is not None:
+            for key, value in self.env_vars.items():
+                os.environ[key] = value
+
+        import torch
+        from nequip.ase.nequip_calculator import NequIPCalculator
+
+        if self.dtype == 'float64':
+            torch.set_default_dtype(torch.float64)
+        else:
+            torch.set_default_dtype(torch.float32)
+        if self.device == "gpu":  # when it's not a specific GPU, use any
+            self.device = "cuda"
+        torch.set_num_threads(self.ncores)
+
+        path = Path(self.model_path)
+        try:
+            calc = NequIPCalculator.from_deployed_model(path, device=self.device)
+        except ValueError:
+            # from nequip evaluate script
+            import nequip
+            from nequip.utils import Config
+            from nequip.scripts.train import default_config, check_code_version
+            from nequip.utils._global_options import _set_global_options
+            from nequip.train import Trainer
+            from nequip.data.transforms import TypeMapper
+
+            global_config = path.parent / "config.yaml"
+            global_config = Config.from_file(
+                str(global_config), defaults=default_config
+            )
+            _set_global_options(global_config)
+            check_code_version(global_config)
+            del global_config
+
+            # load a training session model
+            model, model_config = Trainer.load_model_from_training_session(
+                traindir=path.parent, model_name=path.name
+            )
+
+            # build typemapper -- default to species names
+            type_names = model_config[nequip.scripts.deploy.TYPE_NAMES_KEY]
+            species_to_type_name = {s: s for s in ase.data.chemical_symbols}
+            type_name_to_index = {n: i for i, n in enumerate(type_names)}
+            chemical_symbol_to_type = {
+                sym: type_name_to_index[species_to_type_name[sym]]
+                for sym in ase.data.chemical_symbols
+                if sym in type_name_to_index
+            }
+            if len(chemical_symbol_to_type) != len(type_names):
+                raise ValueError(
+                    "The default mapping of chemical symbols as type names didn't make sense; please provide an explicit mapping in `species_to_type_name`"
+                )
+            transform = TypeMapper(chemical_symbol_to_type=chemical_symbol_to_type)
+
+            calc = NequIPCalculator(model, r_max=model_config["r_max"], device=self.device, transform=transform)
+
+        self.calc, model = calc, calc.model
+
+        if self.dtype == "float64":
+            model = model.double()
+        else:
+            model = model.float()
+        model = model.to(self.device)
+        model.eval()
+        self.model = model
+        self.r_max = float(self.calc.r_max)
+
+        # remove unwanted streamhandler added by MACE / torch!
+        # logging.getLogger("").removeHandler(logging.getLogger("").handlers[0])
+
+    def get_atomic_energy(self, geometry):
+        total = 0
+        numbers, counts = np.unique(geometry.per_atom.numbers, return_counts=True)
+        for idx, number in enumerate(numbers):
+            symbol = chemical_symbols[number]
+            try:
+                total += counts[idx] * self.atomic_energies[symbol]
+            except KeyError:
+                warnings.warn(
+                    f'(NequIPFunction) No atomic energy entry for symbol "{symbol}". Are you sure?'
+                )
+        return total
+
+    def __call__(
+        self,
+        geometry: Geometry,
+    ) -> dict[str, float | np.ndarray]:
+
+        atoms = Atoms(
+            positions=geometry.per_atom.positions,
+            numbers=geometry.per_atom.numbers,
+            cell=np.copy(geometry.cell) if geometry.periodic else None,
+            pbc=geometry.periodic,
+        )
+        self.calc.calculate(atoms)
+        out = format_output(
+            geometry,
+            self.calc.results["energy"],
+            self.calc.results["forces"],
+            self.calc.results["stress"],
+        )
+        return out
+
+
 @typeguard.typechecked
 @dataclass
 class DispersionFunction(EnergyFunction):
@@ -348,6 +467,7 @@ def function_from_json(path: Union[str, Path], **kwargs) -> Function:
         MACEFunction,
         PlumedFunction,
         DispersionFunction,
+        NequIPFunction,
         None,
     ]
     with open(path, "r") as f:

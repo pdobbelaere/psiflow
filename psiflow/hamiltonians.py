@@ -21,6 +21,7 @@ from psiflow.functions import (
     PlumedFunction,
     ZeroFunction,
     DispersionFunction,
+    NequIPFunction,
     _apply,
 )
 from psiflow.geometry import Geometry
@@ -500,3 +501,63 @@ class MACEHamiltonian(Hamiltonian):
             parsl_file.filepath,
         )
         return cls(parsl_file, {})
+
+
+@typeguard.typechecked
+@psiflow.serializable
+class NequIPHamiltonian(Hamiltonian):
+    external: psiflow._DataFuture
+    atomic_energies: dict[str, float]
+    function_name: ClassVar[str] = "NequIPFunction"
+
+    def __init__(
+        self,
+        external: Union[Path, str, psiflow._DataFuture],
+        atomic_energies: dict[str, float],
+    ):
+        self.atomic_energies = atomic_energies
+        if type(external) in [str, Path]:
+            self.external = File(external)
+        else:
+            self.external = external
+        self._create_apps()
+
+    def _create_apps(self):
+        evaluation = psiflow.context().definitions["ModelEvaluation"]
+        apply_app = python_app(_apply, executors=["ModelEvaluation"])
+        resources = evaluation.wq_resources(1)
+
+        # execution-side parameters of function are not included in self.parameters()
+        self.app = partial(
+            apply_app,
+            function_cls=NequIPFunction,
+            parsl_resource_specification=resources,
+            **self.parameters(),
+        )
+
+    def parameters(self) -> dict:
+        model_path = copy_app_future(self.external.filepath, inputs=[self.external])
+        evaluation = psiflow.context().definitions["ModelEvaluation"]
+        return {
+            "model_path": model_path,
+            "atomic_energies": self.atomic_energies,
+            "ncores": evaluation.cores_per_worker,
+            "dtype": "float32",
+            "device": "gpu" if evaluation.gpu else "cpu",
+            "env_vars": evaluation.env_vars,
+        }
+
+    def __eq__(self, hamiltonian: Hamiltonian | MACEHamiltonian) -> bool:
+        if type(hamiltonian) is not NequIPHamiltonian:
+            return False
+        if self.external.filepath != hamiltonian.external.filepath:
+            return False
+        if len(self.atomic_energies) != len(hamiltonian.atomic_energies):
+            return False
+        for symbol, energy in self.atomic_energies.items():
+            if not np.allclose(
+                energy,
+                hamiltonian.atomic_energies[symbol],
+            ):
+                return False
+        return True
