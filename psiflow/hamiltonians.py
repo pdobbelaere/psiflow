@@ -291,16 +291,15 @@ class PlumedHamiltonian(Hamiltonian):
         self.plumed_input = inp
 
     def get_app(self) -> Callable:
-        return partial(
-            apply_htex,
-            function_cls=PlumedFunction,
-            inputs=[self.external],
-            **self.parameters(),
-        )
+        return partial(apply_htex, function_cls=PlumedFunction, **self.parameters())
 
     def parameters(self) -> dict:
         path = self.external.filepath if self.external is not None else None
-        return {"plumed_input": self.plumed_input, "external": path}
+        return {
+            "plumed_input": self.plumed_input,
+            "external": path,
+            "inputs": [self.external],  # wait for future
+        }
 
     def __eq__(self, other: Hamiltonian) -> bool:
         if self is other:
@@ -408,10 +407,10 @@ class MACEHamiltonian(Hamiltonian):
     def get_app(self) -> Callable:
         # execution-side parameters of function are not included in self.parameters()
         evaluation = psiflow.context().definitions["ModelEvaluation"]
+
         return partial(
             apply_modelevaluation,
             function_cls=MACEFunction,
-            inputs=[self.external],
             parsl_resource_specification=evaluation.wq_resources(1),
             **self.parameters(include_env=True),
         )
@@ -426,6 +425,7 @@ class MACEHamiltonian(Hamiltonian):
             "dtype": "float32",
             "device": "cuda" if evaluation.use_gpu else "cpu",
             "calc_kwargs": self.kwargs,
+            "inputs": [self.external],  # wait for future
         }
         if include_env:  # python apps need to set env_vars
             data["env_vars"] = evaluation.env_vars
