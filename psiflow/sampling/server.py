@@ -63,7 +63,7 @@ def insert_addresses(input_xml: ET.Element) -> None:
             address.text = str(Path.cwd() / address.text.strip())
 
 
-def wait_for_clients(input_xml, timeout: int = 60) -> None:
+def wait_for_clients(input_xml, timeout: int = 300) -> None:
     """Make sure clients have initialised successfully"""
 
     # find sockets opened by server
