@@ -20,13 +20,11 @@ def test_mace_init(tmp_path, mace_config, dataset):
     model.update_kwargs(seed=42, pair_repulsion=copy_app_future(True))
 
     assert model.model_future is None
-    assert model.iteration == -1
-    future = model.initialize(dataset[:5])
-    assert isinstance(model.model_future, DataFuture)
-    assert model.iteration == -1
-    future.result()
-    assert model.path_mlp.is_file()
     assert model.iteration == 0
+    model.initialize(dataset[:5])
+    assert isinstance(model.model_future, DataFuture)
+    assert model.iteration == 1
+    model.wait_for.result()
 
     config = _read_yaml([model.path_config])
     assert config.pop(KEY_ATOMIC_ENERGIES) == atomic_energies
@@ -34,7 +32,7 @@ def test_mace_init(tmp_path, mace_config, dataset):
     assert config["seed"] == 42
     assert config["pair_repulsion"]
 
-    mlp = torch.load(model.path_mlp, weights_only=False)
+    mlp = torch.load(model._get_final_model(), weights_only=False)
     atomic_energies_ = mlp.atomic_energies_fn.atomic_energies.numpy()
     assert atomic_energies_.flatten().tolist() == [7, 3]  # H, Cu
 
@@ -47,7 +45,7 @@ def test_mace_init(tmp_path, mace_config, dataset):
     model._load_config()
     assert model.config == config
     assert model.atomic_energies == atomic_energies
-    assert model.iteration == 0
+    assert model.iteration == 1
 
 
 def test_mace_train(gpu, mace_config, dataset, tmp_path):
@@ -59,13 +57,16 @@ def test_mace_train(gpu, mace_config, dataset, tmp_path):
     validation = dataset[-5:]
     path = tmp_path / "mace"
     model = MACE.create(path, mace_config)
+    assert model.iteration == 0
     [data] = validation.get(key)
 
     model.train(training, validation)
+    assert model.iteration == 2  # init + train
     hamiltonian = model.create_hamiltonian()
     validation0 = hamiltonian.evaluate(validation)
     [data0] = validation0.get(key)
     future_train = model.train(training, validation)
+    assert model.iteration == 3
     hamiltonian = model.create_hamiltonian()
     validation1 = hamiltonian.evaluate(validation)
     [data1] = validation1.get(key)
@@ -77,10 +78,12 @@ def test_mace_train(gpu, mace_config, dataset, tmp_path):
 
     # train from load
     model_ = MACE.load(path)
+    assert model_.iteration == 3
     hamiltonian = model_.create_hamiltonian()
     validation2 = hamiltonian.evaluate(validation)
     [data2] = validation2.get(key)
     model_.train(training, validation)
+    assert model_.iteration == 4
     hamiltonian = model_.create_hamiltonian()
     validation3 = hamiltonian.evaluate(validation)
     [data3] = validation3.get(key)
@@ -97,6 +100,39 @@ def test_mace_train(gpu, mace_config, dataset, tmp_path):
     assert rmse0 > rmse1
     assert np.isclose(rmse1, rmse2)
     assert rmse2 > rmse3
+
+
+def test_mace_reset(gpu, mace_config, dataset, tmp_path):
+    model = MACE.create(tmp_path / "mace", mace_config)
+    model.update_kwargs(max_num_epochs=1)
+    training = dataset[:2]
+    validation = dataset[-1:]
+
+    # 0-init and 1-train
+    model.train(training, validation)
+    hamiltonian = model.create_hamiltonian()
+    out0 = hamiltonian.evaluate(validation)
+
+    model.reset()
+
+    # 2-init and 3-train
+    model.train(training, validation)
+    hamiltonian = model.create_hamiltonian()
+    out1 = hamiltonian.evaluate(validation)
+
+    # 4-train
+    model.train(training, validation)
+
+    # verify all tasks finish correctly
+    out0.reset()
+    out1.reset()
+    model.wait_for.result()
+
+    assert list(model.path_checkpoints.glob("0-init*.model"))
+    assert list(model.path_checkpoints.glob("1-train*.model"))
+    assert list(model.path_checkpoints.glob("2-init*.model"))
+    assert list(model.path_checkpoints.glob("3-train*.model"))
+    assert list(model.path_checkpoints.glob("4-train*.model"))
 
 
 def test_mace_hamiltonian(dataset, mace_foundation):
