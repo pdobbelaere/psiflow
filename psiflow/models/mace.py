@@ -63,6 +63,10 @@ def format_E0s(atomic_energies: dict) -> dict | str:
         return "average"
 
 
+def iteration_from_model(path: Path) -> int:
+    return int(path.stem.split('-')[0])
+
+
 @bash_app(executors=["ModelTraining"])
 def execute(
     bash_template: str,
@@ -91,18 +95,20 @@ class MACE:
         MODEL_DIRS[str(root)] = self
 
         self.root = Path(root)
-        self.iteration = 0
+        self.config = {}
+        self.iteration = -1
         self.atomic_energies = {}
         self.model_future = None
         self.wait_for = None
 
-        if config is not None:
-            self.config = sanitise_config(config)
-            yaml.safe_dump(self.full_config, self.path_config.open("w"))
-        else:
+        if self.path_config.is_file():
             self._load_config()
+        if config is not None:
+            self.config |= sanitise_config(config)
+            yaml.safe_dump(self.full_config, self.path_config.open("w"))
+
         if (p := self._get_final_model()) is not None:
-            assert self.iteration == int(p.name[0]) + 1
+            assert self.iteration == iteration_from_model(p)
             self.model_future = File(p)
 
     def update_kwargs(self, **kwargs: Any | Future) -> None:
@@ -144,6 +150,7 @@ class MACE:
         self, path_train: _DataFuture, path_val: Optional[_DataFuture] = None
     ) -> AppFuture:
         """"""
+        self.iteration += 1
         future = train_app(
             self,
             self._resolve_config_futures(),
@@ -154,22 +161,21 @@ class MACE:
         )
         self.wait_for = future
         self.model_future = future.outputs[0]
-        self.iteration += 1
         return future
 
     def _load_config(self) -> None:
         """"""
         config = yaml.safe_load(self.path_config.open())
         self.atomic_energies = config.pop(KEY_ATOMIC_ENERGIES)
-        self.iteration = config.pop(KEY_ITERATION) + 1  # start next iteration
+        self.iteration = config.pop(KEY_ITERATION)
         self.config = sanitise_config(config)
 
     def _get_final_model(self) -> Optional[Path]:
         """Return the most recent model stored under checkpoints"""
-        files = sorted(self.path_checkpoints.glob("*.model"))
+        files = list(self.path_checkpoints.glob("*.model"))
         if len(files) == 0:
             return None
-        return files[-1]
+        return max(files, key=lambda p: iteration_from_model(p))
 
     def _resolve_config_futures(self) -> AppFuture:
         """Wait for all futures in config and atomic energies"""
@@ -206,6 +212,7 @@ class MACE:
     def load(cls, path_dir: Path):
         """Load model from existing directory"""
         path = psiflow.resolve_and_check(Path(path_dir))
+        assert path.is_dir()
         return cls(path)
 
 
@@ -215,8 +222,8 @@ def train_app(
     config: dict,
     file_train: File,
     file_val: Optional[File] = None,
-    inputs: Sequence = (),
-    outputs: Sequence[File] = (),
+    inputs: list = [],
+    outputs: list[File] = [],
 ) -> AppFuture:
     """Wait for inputs and (re)train model"""
     assert len(outputs) == 1
@@ -300,7 +307,7 @@ def execute_train_command(root: Path, config: dict) -> AppFuture:
 
 
 @python_app(executors=["default_threads"])
-def process_output(model: MACE, config: dict, inputs: Sequence = (), outputs: Sequence = ()) -> None:
+def process_output(model: MACE, config: dict, inputs: list = [], outputs: list = []) -> None:
     """Waits for future and processes MLP training output"""
 
     # copy last model

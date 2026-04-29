@@ -20,10 +20,10 @@ def test_mace_init(tmp_path, mace_config, dataset):
     model.update_kwargs(seed=42, pair_repulsion=copy_app_future(True))
 
     assert model.model_future is None
-    assert model.iteration == 0
+    assert model.iteration == -1
     model.initialize(dataset[:5])
     assert isinstance(model.model_future, DataFuture)
-    assert model.iteration == 1
+    assert model.iteration == 0
     model.wait_for.result()
 
     config = _read_yaml([model.path_config])
@@ -45,7 +45,7 @@ def test_mace_init(tmp_path, mace_config, dataset):
     model._load_config()
     assert model.config == config
     assert model.atomic_energies == atomic_energies
-    assert model.iteration == 1
+    assert model.iteration == 0
 
 
 def test_mace_train(gpu, mace_config, dataset, tmp_path):
@@ -57,16 +57,16 @@ def test_mace_train(gpu, mace_config, dataset, tmp_path):
     validation = dataset[-5:]
     path = tmp_path / "mace"
     model = MACE.create(path, mace_config)
-    assert model.iteration == 0
+    assert model.iteration == -1
     [data] = validation.get(key)
 
     model.train(training, validation)
-    assert model.iteration == 2  # init + train
+    assert model.iteration == 1  # init + train
     hamiltonian = model.create_hamiltonian()
     validation0 = hamiltonian.evaluate(validation)
     [data0] = validation0.get(key)
     future_train = model.train(training, validation)
-    assert model.iteration == 3
+    assert model.iteration == 2
     hamiltonian = model.create_hamiltonian()
     validation1 = hamiltonian.evaluate(validation)
     [data1] = validation1.get(key)
@@ -78,12 +78,12 @@ def test_mace_train(gpu, mace_config, dataset, tmp_path):
 
     # train from load
     model_ = MACE.load(path)
-    assert model_.iteration == 3
+    assert model_.iteration == 2
     hamiltonian = model_.create_hamiltonian()
     validation2 = hamiltonian.evaluate(validation)
     [data2] = validation2.get(key)
     model_.train(training, validation)
-    assert model_.iteration == 4
+    assert model_.iteration == 3
     hamiltonian = model_.create_hamiltonian()
     validation3 = hamiltonian.evaluate(validation)
     [data3] = validation3.get(key)
