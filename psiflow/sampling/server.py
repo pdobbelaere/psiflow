@@ -15,7 +15,6 @@ from ipi.engine.simulation import Simulation
 from ipi.utils.softexit import softexit
 
 from psiflow.geometry import Geometry
-from psiflow.sampling.utils import create_xml_list
 
 INPUT_XML = "input.xml"
 NONPERIODIC_CELL = 1000 * np.eye(3)

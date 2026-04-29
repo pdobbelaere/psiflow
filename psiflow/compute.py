@@ -74,7 +74,7 @@ class ComputeResult:
 def _apply(
     states: Sequence[Geometry],
     function_cls: Type[Function],
-    inputs: Sequence = (),
+    inputs: list = [],
     parsl_resource_specification: dict = {},
     **parameters,
 ) -> ComputeResult:

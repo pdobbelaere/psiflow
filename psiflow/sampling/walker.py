@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 from typing import Optional, Union, Callable
+from collections.abc import Sequence
 from enum import Enum
 from dataclasses import dataclass, field
 from copy import deepcopy
@@ -148,7 +149,7 @@ class Walker:
             return Ensemble.NPT
 
 
-def partition(walkers: list[Walker]) -> list[list[int]]:
+def partition(walkers: Sequence[Walker]) -> list[list[int]]:
     indices = []
     for i, walker in enumerate(walkers):
         found = False

@@ -12,7 +12,7 @@ from psiflow.utils.parse import find_line
 from psiflow.utils.apps import copy_app_future
 
 
-KEY_PARSE = 'CALCULATION SUCCESFUL'
+KEY_PARSE = 'CALCULATION SUCCESSFUL'
 
 def make_bash_template() -> str:
     template = psiflow.context().bash_template
@@ -22,7 +22,7 @@ def make_bash_template() -> str:
 
 @psiflow.register_serializable
 class ReferenceDummy(Reference):
-    executor = "default_htex"
+    executor = "default_threads"
     _execute_label = "dummy_singlepoint"
 
     def __init__(self, outputs: Sequence[str] = ("energy", "forces")):

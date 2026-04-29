@@ -98,8 +98,8 @@ save_metrics = python_app(_save_metrics, executors=["default_threads"])
 
 
 def _dump_json(
-    inputs: Sequence = (),
-    outputs: Sequence = (),
+    inputs: list = [],
+    outputs: list = [],
     **kwargs,
 ) -> str:
     assert len(outputs) <= 1

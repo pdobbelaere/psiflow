@@ -2,7 +2,8 @@ import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from itertools import cycle
-from typing import Optional, Union, Iterable
+from typing import Optional, Union
+from collections.abc import Iterable, Sequence
 
 import parsl
 import numpy as np
@@ -662,7 +663,7 @@ def _sample(
 
 
 def sample(
-    walkers: list[Walker],
+    walkers: Sequence[Walker],
     steps: int,
     step: Optional[int] = None,
     start: int = 0,

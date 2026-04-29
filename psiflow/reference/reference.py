@@ -159,7 +159,7 @@ class Reference:
 def _process_output(
     geom: Geometry,
     reference: Reference,
-    inputs: Sequence[File] = (),
+    inputs: list[File] = [],
 ) -> Geometry:
     """Updates geometry with ab initio labels"""
     stdout = Path(inputs[0]).read_text()
