@@ -115,6 +115,9 @@ def run(start_xyz: str, input_xml: str):
 def cleanup(output_xyz: str, output_props: str, output_trajs: str) -> None:
     from psiflow.data.file import _write_frames
 
+    # TODO: i-pi-trimsim to make output consistent with checkpoint?
+    #  see https://github.com/i-pi/i-pi/issues/534
+
     print("Starting cleanup")
     with open(INPUT_XML, "r") as f:
         content = f.read()
@@ -158,7 +161,7 @@ def cleanup(output_xyz: str, output_props: str, output_trajs: str) -> None:
     assert len(states) == len(output_trajs)
     for idx, file in enumerate(output_trajs):
         file_src = next(Path.cwd().glob(f"{prefix}*{idx}*.trajectory*.extxyz"))
-        atoms = read(file_src, ":")
+        atoms = read(file_src, ":", format="extxyz")
         periodic = states[idx].periodic
         for at in atoms:
             if not periodic:  # load and replace cell

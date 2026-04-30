@@ -1,6 +1,5 @@
 import copy
 from typing import Any, Callable
-from collections.abc import Sequence
 
 from parsl import File, python_app
 from parsl.dataflow.futures import AppFuture, Future

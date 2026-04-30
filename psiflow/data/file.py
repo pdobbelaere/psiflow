@@ -20,7 +20,6 @@ from psiflow.data.utils import (
     assign_ids,
 )
 
-
 FileLike: TypeAlias = str | Path | File
 
 

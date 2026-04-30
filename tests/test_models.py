@@ -3,13 +3,13 @@ import torch
 import numpy as np
 from parsl.app.futures import DataFuture
 
+import yaml
 import psiflow
 from psiflow.compute import compare_arrays
 from psiflow.hamiltonians import MACEHamiltonian
 from psiflow.models import MACE
 from psiflow.models.mace import KEY_ATOMIC_ENERGIES, KEY_ITERATION, MODEL_DIRS
 from psiflow.utils.apps import copy_app_future
-from psiflow.utils.io import _read_yaml
 
 
 def test_mace_init(tmp_path, mace_config, dataset):
@@ -26,7 +26,7 @@ def test_mace_init(tmp_path, mace_config, dataset):
     assert model.iteration == 0
     model.wait_for.result()
 
-    config = _read_yaml([model.path_config])
+    config = yaml.safe_load(model.path_config.open())
     assert config.pop(KEY_ATOMIC_ENERGIES) == atomic_energies
     assert config.pop(KEY_ITERATION) == 0
     assert config["seed"] == 42

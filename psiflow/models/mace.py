@@ -4,7 +4,6 @@ import weakref
 from pathlib import Path
 from enum import StrEnum
 from typing import Optional, Any
-from collections.abc import Sequence
 
 import ase
 import ase.io

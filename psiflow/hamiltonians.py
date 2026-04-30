@@ -1,7 +1,7 @@
 import logging
 from functools import partial
 from pathlib import Path
-from typing import Optional, Union, Callable, Sequence, Any, ClassVar
+from typing import Optional, Callable, Sequence, Any, ClassVar
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -17,7 +17,6 @@ from psiflow.compute import (
     compute,
     _apply,
     ComputeInput,
-    ComputeResult,
     insert_results,
 )
 from psiflow.functions import (
@@ -456,8 +455,9 @@ class MACEHamiltonian(Hamiltonian):
         return cls(external=file)
 
 
-def combine_hamiltonians(hamiltonians: list[Hamiltonian]) -> MixtureHamiltonian:
-    return sum(hamiltonians, start=Zero())  # mostly for type hinting
+def make_mixture(hamiltonians: list[Hamiltonian]) -> MixtureHamiltonian:
+    # multiply by 1.0 to ensure result is Mixture
+    return sum(hamiltonians, start=Zero()) * 1.0
 
 
 def attrs_equal(attr1: Any, attr2: Any) -> bool:
