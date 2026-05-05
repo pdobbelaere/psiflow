@@ -68,7 +68,7 @@ def get_minimum_energy(element: str, **kwargs) -> AppFuture:
         f"\nAtomic energies for element {element}",
         *[f"\tMultiplicity {m}:{energy:>10.4f} eV" for m, energy in energies.items()],
     ]
-    logger.info('\n'.join(msg))
+    print('\n'.join(msg))
     assert not np.isinf(energy), f"Atomic energy calculation of '{element}' failed"
     return energy
 

@@ -4,7 +4,6 @@ Updated version of the Psiflow driver included in i-Pi
 
 import os
 import time
-from typing import Any
 
 import numpy as np
 from ase.data import chemical_symbols
