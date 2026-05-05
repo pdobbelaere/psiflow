@@ -39,7 +39,11 @@ def parse_checkpoint(file_xml: str | Path) -> list[Geometry]:
         natoms, nbeads = beads.natoms, beads.nbeads  # average over beads
         positions = np.asarray(beads.q).reshape(nbeads, natoms, 3).mean(axis=0)
         numbers = np.array([atomic_numbers[s] for s in beads.names])
-        cell = np.asarray(sys.cell.fetch().h).T  # transpose to undo i-Pi convention
+        try:
+            cell = np.asarray(sys.cell.fetch().h).T  # transpose to undo i-Pi convention
+        except ValueError:
+            # cell matrix must be upper triangular (for i-Pi)
+            cell = sys.cell.value.reshape(3, 3).T
         geometry = Geometry.from_data(numbers, positions * Bohr, cell * Bohr)
 
         # get current internal system time
